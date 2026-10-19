@@ -59,7 +59,7 @@ final class GesturePadView extends View {
     private float pinchAccumulator;
     private double spaceProgress;
     private double lastSpaceDelta;
-    private long lastMoveSampleAt;
+    private long lastMoveSampleAtNanos;
     private double filteredVelocity;
     private long lastPinchHapticAt;
 
@@ -149,7 +149,7 @@ final class GesturePadView extends View {
             maxTouches = 0;
             spaceProgress = 0;
             lastSpaceDelta = 0;
-            lastMoveSampleAt = 0;
+            lastMoveSampleAtNanos = 0;
             filteredVelocity = 0;
         } else if (priorCount == 1) {
             if (mode == Mode.SINGLE_CANDIDATE) mode = Mode.TWO_CANDIDATE;
@@ -400,21 +400,25 @@ final class GesturePadView extends View {
 
     private void sendMove(float dx, float dy) {
         if (getWidth() <= 1 || getHeight() <= 1) return;
-        double gain = settings.adaptiveMoveSpeed ? adaptiveGain(dx, dy) : 1.0;
+        // Android MotionEvent deltas are physical pixels; iOS gesture deltas are
+        // logical points. Convert to dp before evaluating the shared speed curve.
+        double density = getResources().getDisplayMetrics().density;
+        double gain = settings.adaptiveMoveSpeed ? adaptiveGain(dx / density, dy / density) : 1.0;
         transport.send("move", dx / getHeight() * settings.horizontalSpeed * gain,
                 dy / getWidth() * settings.verticalSpeed * gain, null, null, null, null);
     }
 
-    private double adaptiveGain(float dx, float dy) {
-        long now = android.os.SystemClock.uptimeMillis();
-        double elapsed = lastMoveSampleAt == 0 ? 0.016 : Math.min(0.25, Math.max(0.004, (now - lastMoveSampleAt) / 1000.0));
+    private double adaptiveGain(double dx, double dy) {
+        long now = System.nanoTime();
+        double elapsed = lastMoveSampleAtNanos == 0 ? 1.0 / 60.0
+                : Math.min(0.25, Math.max(1.0 / 240.0, (now - lastMoveSampleAtNanos) / 1_000_000_000.0));
         double instant = Math.hypot(dx, dy) / elapsed;
-        if (lastMoveSampleAt == 0 || now - lastMoveSampleAt > 250) filteredVelocity = instant;
+        if (lastMoveSampleAtNanos == 0 || now - lastMoveSampleAtNanos > 250_000_000L) filteredVelocity = instant;
         else {
             double smoothing = 1.0 - Math.exp(-elapsed / 0.075);
             filteredVelocity += (instant - filteredVelocity) * smoothing;
         }
-        lastMoveSampleAt = now;
+        lastMoveSampleAtNanos = now;
         double p = Math.max(0, Math.min(1, (filteredVelocity - 70) / (520 - 70)));
         double eased = p * p * (3 - 2 * p);
         double floor = Math.max(0.2, Math.min(0.8, settings.slowMoveMultiplier));
