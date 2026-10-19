@@ -1,8 +1,11 @@
 # macOS / Xcode / SwiftPM
 .DS_Store
 **/.build/
+**/.gradle/
 **/DerivedData/
 **/build/
+local.properties
+TracepadAndroid/gradlew.bat
 *.xcuserstate
 xcuserdata/
 *.ipa

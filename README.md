@@ -2,7 +2,7 @@
 
 > **PUBLIC / 公开源码仓库**。这里只维护清理后的源码；构建过程、个人签名信息和旧安装包保存在独立的私有历史仓库。
 
-把 iPhone 当作 Mac 的多点触控板，通过 USB 有线连接。手机负责识别手势，Mac 端将手势转换成鼠标操作。
+把 iPhone 或 Android 手机当作 Mac 的多点触控板，通过 USB 有线连接。手机负责识别手势，Mac 端将手势转换成鼠标操作。
 
 ## 功能
 
@@ -17,6 +17,7 @@
 ```text
 TracepadMac/       macOS 接收端
 TracepadRemote/    iOS 触控板
+TracepadAndroid/   Android 触控板
 tools/             图标生成工具
 ```
 
@@ -24,8 +25,11 @@ tools/             图标生成工具
 
 - macOS 13 或更高版本
 - iOS 16 或更高版本
+- Android 8.0（API 26）或更高版本
 - Xcode（构建 iOS 端）
-- Homebrew 的 `libusbmuxd`（提供 `iproxy`，用于 USB 转发）
+- JDK 17 与 Android SDK Platform 35（构建 Android 端）
+- Homebrew 的 `libusbmuxd`（提供 iPhone USB 转发 `iproxy`）
+- Android `platform-tools`（提供 `adb` USB 转发）
 
 安装 USB 工具：
 
@@ -46,11 +50,20 @@ swift build -c release
 
 在 Xcode 打开 `TracepadRemote/TracepadRemote.xcodeproj`，选择 `TracepadRemote` scheme 和已连接的 iPhone，在 **Signing & Capabilities** 里选择你自己的开发团队，然后运行。首次安装需在 iPhone 上信任此开发者，并启用开发者模式（若系统要求）。
 
+### Android 端
+
+```sh
+cd TracepadAndroid
+./gradlew assembleDebug
+```
+
+APK 位于 `TracepadAndroid/app/build/outputs/apk/debug/app-debug.apk`。首次构建需在 Android Studio SDK Manager 接受 SDK 许可并安装 Platform 35 / Build Tools 35.0.0。
+
 ## 使用
 
-1. 用 USB 线连接 iPhone 和 Mac，并在 iPhone 上确认信任。
+1. 用 USB 线连接 iPhone 或 Android 手机和 Mac；iPhone 确认信任，Android 开启 USB 调试并授权此 Mac。
 2. 启动 Mac 接收端并授予“辅助功能/设备控制”权限。
-3. 启动 iPhone 端，看到 USB 已连接后即可使用。
+3. 启动对应的手机端并保持前台，看到 USB 已连接后即可使用。iPhone 走 USBMux/iproxy，Android 走 ADB `forward`。
 
 ## 开源与隐私
 

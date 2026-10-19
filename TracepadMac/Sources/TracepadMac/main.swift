@@ -100,7 +100,7 @@ do {
 // USB 桥接或手机 listener 不可用时，在日志和菜单栏里明确显示
 DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
     if !server.isReady {
-        log("[main] ⚠️ USB 通道未建立；检查 iPhone USB 线、信任状态、miaokon-sj 是否前台运行")
+        log("[main] ⚠️ USB 通道未建立；检查手机 USB 线、信任/USB 调试授权和 miaokon-sj 前台状态")
     }
 }
 
@@ -174,6 +174,6 @@ extension NSWorkspace {
     }
 }
 
-log("[main] 就绪，等待 iPhone 通过 USBMux/iproxy 有线连接")
+log("[main] 就绪，等待 iPhone USBMux 或 Android ADB 有线连接")
 app.run()
 NotificationCenter.default.removeObserver(terminationObserver)

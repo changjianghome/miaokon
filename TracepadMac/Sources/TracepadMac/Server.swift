@@ -8,8 +8,12 @@ final class Server {
     private var connection: NWConnection?
     private var bridgeProcess: Process?
     private var retryWorkItem: DispatchWorkItem?
+    private var bridgeRetryWorkItem: DispatchWorkItem?
     private var retryDelay: TimeInterval = 1
     private var receiveBuffer = Data()
+    private var adbExecutable: String?
+    private var adbSerial: String?
+    private var deviceLabel = "手机"
     private let queue = DispatchQueue(label: "tracepad.server", qos: .userInteractive)
     private let mouse: Mouse
     private(set) var isReady = false
@@ -29,6 +33,8 @@ final class Server {
     func stop() {
         retryWorkItem?.cancel()
         retryWorkItem = nil
+        bridgeRetryWorkItem?.cancel()
+        bridgeRetryWorkItem = nil
         connection?.cancel()
         connection = nil
         isReady = false
@@ -37,13 +43,50 @@ final class Server {
             process.waitUntilExit()
         }
         bridgeProcess = nil
+        if let adb = adbExecutable, let serial = adbSerial {
+            _ = run(adb, ["-s", serial, "forward", "--remove", "tcp:\(port)"])
+        }
+        adbSerial = nil
     }
 
     func start() throws {
+        try configureBridge()
+    }
+
+    private func configureBridge() throws {
+        if let adb = findADB(), let devices = androidDevices(adb: adb) {
+            adbExecutable = adb
+            if let serial = devices.authorized.first {
+                if let process = bridgeProcess, process.isRunning {
+                    process.terminate()
+                    process.waitUntilExit()
+                }
+                bridgeProcess = nil
+                _ = run(adb, ["-s", serial, "forward", "--remove", "tcp:\(port)"])
+                let result = run(adb, ["-s", serial, "forward", "tcp:\(port)", "tcp:\(port)"])
+                guard result.status == 0 else {
+                    throw NSError(domain: "TracepadUSB", code: 2, userInfo: [
+                        NSLocalizedDescriptionKey: "无法建立 Android ADB USB 转发：\(result.output.trimmingCharacters(in: .whitespacesAndNewlines))"
+                    ])
+                }
+                adbSerial = serial
+                deviceLabel = "Android 手机"
+                log("[usb] adb forward 已启动：Mac 127.0.0.1:\(port) → Android localhost:\(port)")
+                connectToPhone()
+                return
+            }
+            if !devices.unauthorized.isEmpty {
+                onClientState?("检测到 Android，但未授权 USB 调试；请在手机弹窗中允许此电脑")
+                log("[usb] Android USB 调试尚未授权，等待设备授权")
+                scheduleBridgeRetry()
+                return
+            }
+        }
+
         let candidates = ["/opt/homebrew/bin/iproxy", "/usr/local/bin/iproxy"]
         guard let executable = candidates.first(where: FileManager.default.isExecutableFile(atPath:)) else {
             throw NSError(domain: "TracepadUSB", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "找不到 iproxy。请先在终端运行：brew install libusbmuxd"
+                NSLocalizedDescriptionKey: "找不到 Android ADB 或 iPhone iproxy。Android 请安装 Android platform-tools 并开启 USB 调试；iPhone 请运行：brew install libusbmuxd"
             ])
         }
 
@@ -55,8 +98,68 @@ final class Server {
         process.standardError = FileHandle.nullDevice
         try process.run()
         bridgeProcess = process
+        adbSerial = nil
+        deviceLabel = "iPhone"
         log("[usb] iproxy 已启动：USB → 127.0.0.1:\(port) → iPhone:\(port)")
         connectToPhone()
+    }
+
+    private func scheduleBridgeRetry() {
+        guard bridgeRetryWorkItem == nil else { return }
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.bridgeRetryWorkItem = nil
+            do {
+                try self.configureBridge()
+            } catch {
+                self.onClientState?("USB 转发启动失败：\(error.localizedDescription)，正在重试")
+                self.scheduleBridgeRetry()
+            }
+        }
+        bridgeRetryWorkItem = item
+        queue.asyncAfter(deadline: .now() + 2, execute: item)
+    }
+
+    private func findADB() -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let candidates = [
+            "\(home)/Library/Android/sdk/platform-tools/adb",
+            "/opt/homebrew/bin/adb",
+            "/usr/local/bin/adb"
+        ]
+        return candidates.first(where: FileManager.default.isExecutableFile(atPath:))
+    }
+
+    private func androidDevices(adb: String) -> (authorized: [String], unauthorized: [String])? {
+        let result = run(adb, ["devices"])
+        guard result.status == 0 else { return nil }
+        var authorized: [String] = []
+        var unauthorized: [String] = []
+        for line in result.output.split(separator: "\n").dropFirst() {
+            let fields = line.split(whereSeparator: { $0 == "\t" || $0 == " " })
+            guard fields.count >= 2 else { continue }
+            let serial = String(fields[0])
+            if fields[1] == "device" { authorized.append(serial) }
+            if fields[1] == "unauthorized" { unauthorized.append(serial) }
+        }
+        return (authorized, unauthorized)
+    }
+
+    private func run(_ executable: String, _ arguments: [String]) -> (status: Int32, output: String) {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+        } catch {
+            return (-1, error.localizedDescription)
+        }
     }
 
     private func connectToPhone() {
@@ -76,7 +179,7 @@ final class Server {
             case .ready:
                 self.isReady = true
                 self.retryDelay = 1
-                DispatchQueue.main.async { self.onClientState?("USB 已连接 iPhone") }
+                DispatchQueue.main.async { self.onClientState?("USB 已连接 \(self.deviceLabel)") }
                 log("[usb] USB TCP 通道已连接")
                 self.read(from: client, buffer: Data())
             case .waiting(let error):
