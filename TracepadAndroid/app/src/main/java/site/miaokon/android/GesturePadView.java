@@ -344,11 +344,12 @@ final class GesturePadView extends View {
                 && now - point.beganAt <= 350 && travel <= 12 && !cancelled) {
             transport.send("tap", null, null, null, null, null, null);
             haptic(0);
-        } else if (mode == Mode.TWO_CANDIDATE && maxTouches == 2
+        } else if (mode == Mode.TWO_CANDIDATE && touches.size() == 1 && maxTouches == 2
                 && now - point.beganAt <= 350 && !twoFingerMoved && !cancelled
                 && settings.twoFingerRightClick) {
             transport.send("rightClick", null, null, null, null, null, null);
             haptic(1);
+            mode = Mode.IGNORE;
         }
         touches.remove(id);
         if (touches.isEmpty()) {
