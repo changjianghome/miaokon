@@ -57,6 +57,8 @@ final class GesturePadView extends View {
     private float initialPinchDistance;
     private float lastPinchDistance;
     private float pinchAccumulator;
+    private float alternateGestureDistance;
+    private float alternateGestureSignedDistance;
     private double spaceProgress;
     private double lastSpaceDelta;
     private long lastMoveSampleAtNanos;
@@ -173,10 +175,12 @@ final class GesturePadView extends View {
         }
         touches.put(id, new TouchPoint(x, y, android.os.SystemClock.uptimeMillis()));
         maxTouches = Math.max(maxTouches, touches.size());
-        if (touches.size() == 2 && mode == Mode.TWO_CANDIDATE) {
+        if (touches.size() == 2 && (mode == Mode.TWO_CANDIDATE || mode == Mode.TWO_SCROLL)) {
             initialPinchDistance = distanceBetweenTouches();
             lastPinchDistance = initialPinchDistance;
             pinchAccumulator = 0;
+            alternateGestureDistance = 0;
+            alternateGestureSignedDistance = 0;
         }
     }
 
@@ -203,6 +207,7 @@ final class GesturePadView extends View {
         }
         if (deltas.isEmpty()) return;
         long now = android.os.SystemClock.uptimeMillis();
+        boolean suppressTwoFingerOutput = false;
         if (mode == Mode.SINGLE_CANDIDATE && touches.size() == 1 && settings.singleFingerDrag
                 && now - gestureStartedAt >= 550) {
             mode = Mode.SINGLE_HOLD;
@@ -213,6 +218,8 @@ final class GesturePadView extends View {
             mode = Mode.SINGLE_MOVE;
         } else if (mode == Mode.TWO_CANDIDATE && touches.size() == 2) {
             classifyTwoFingerGesture();
+        } else if ((mode == Mode.TWO_SCROLL || mode == Mode.TWO_PINCH) && touches.size() == 2) {
+            suppressTwoFingerOutput = updateTwoFingerMode(deltas);
         } else if (mode == Mode.FOUR_CANDIDATE && touches.size() == 4) {
             classifyFourFingerGesture();
         } else if (mode == Mode.THREE_CANDIDATE && anyTravelAbove(12)) {
@@ -232,12 +239,16 @@ final class GesturePadView extends View {
                 sendDrag(meanDeltaX(deltas), meanDeltaY(deltas));
                 break;
             case TWO_SCROLL:
-                if (touches.size() == 2) sendScroll(sumDx(deltas), sumDy(deltas), 80.0);
+                if (touches.size() == 2 && !suppressTwoFingerOutput) {
+                    sendScroll(sumDx(deltas), sumDy(deltas), 80.0);
+                }
                 break;
             case TWO_PINCH:
-                float distance = distanceBetweenTouches();
-                emitPinch(distance - lastPinchDistance);
-                lastPinchDistance = distance;
+                if (!suppressTwoFingerOutput) {
+                    float distance = distanceBetweenTouches();
+                    emitPinch(distance - lastPinchDistance);
+                    lastPinchDistance = distance;
+                }
                 break;
             case FOUR_SCROLL:
                 sendScroll(meanDeltaX(deltas), meanDeltaY(deltas), 40.0);
@@ -273,14 +284,72 @@ final class GesturePadView extends View {
             mode = Mode.TWO_PINCH;
             lastPinchDistance = distanceBetweenTouches();
             pinchAccumulator = 0;
+            alternateGestureDistance = 0;
+            alternateGestureSignedDistance = 0;
             haptic(1);
             emitPinch(distanceDelta);
         } else if (centerTravel >= 12 && Math.abs(distanceDelta) <= Math.max(16, centerTravel * 1.8f)) {
             mode = Mode.TWO_SCROLL;
+            lastPinchDistance = distanceBetweenTouches();
+            alternateGestureDistance = 0;
+            alternateGestureSignedDistance = 0;
             haptic(1);
         } else if (maxFingerTravel() > 12) {
             twoFingerMoved = true;
         }
+    }
+
+    /** Reclassify an active two-finger gesture when its motion changes from scroll to pinch or back. */
+    private boolean updateTwoFingerMode(List<Delta> deltas) {
+        float distance = distanceBetweenTouches();
+        float distanceDelta = distance - lastPinchDistance;
+        float centerTravel = (float) Math.hypot(sumDx(deltas) / 2f, sumDy(deltas) / 2f);
+        float threshold = 12f * getResources().getDisplayMetrics().density;
+
+        if (mode == Mode.TWO_SCROLL) {
+            lastPinchDistance = distance;
+            if (Math.abs(distanceDelta) > Math.max(0.25f * getResources().getDisplayMetrics().density,
+                    centerTravel * 1.25f)) {
+                alternateGestureDistance += Math.abs(distanceDelta);
+                alternateGestureSignedDistance += distanceDelta;
+                if (Math.abs(alternateGestureSignedDistance) >= threshold) {
+                    mode = Mode.TWO_PINCH;
+                    pinchAccumulator = 0;
+                    alternateGestureDistance = 0;
+                    float accumulated = alternateGestureSignedDistance;
+                    alternateGestureSignedDistance = 0;
+                    lastPinchDistance = distance;
+                    haptic(1);
+                    emitPinch(accumulated);
+                }
+                return true;
+            }
+            alternateGestureDistance = 0;
+            alternateGestureSignedDistance = 0;
+            return false;
+        }
+
+        if (centerTravel > Math.max(0.25f * getResources().getDisplayMetrics().density,
+                Math.abs(distanceDelta) * 1.25f)) {
+            alternateGestureDistance += centerTravel;
+            // Re-anchor while suppressing the candidate scroll so it is not later emitted as zoom.
+            lastPinchDistance = distance;
+            if (alternateGestureDistance >= threshold) {
+                transport.send("pinch", null, null, 0.0, "ended",
+                        null, "two-finger pinch changed to scroll");
+                mode = Mode.TWO_SCROLL;
+                pinchAccumulator = 0;
+                alternateGestureDistance = 0;
+                alternateGestureSignedDistance = 0;
+                haptic(1);
+                return false;
+            }
+            return true;
+        }
+
+        alternateGestureDistance = 0;
+        alternateGestureSignedDistance = 0;
+        return false;
     }
 
     private void classifyFourFingerGesture() {

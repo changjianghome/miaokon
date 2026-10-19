@@ -11,6 +11,12 @@
 - 三指拖拽、四指桌面切换与 Mission Control
 - 独立调节鼠标、滚动和缩放速度，支持触觉反馈
 - Android 可通过 USB/ADB 或 Wi-Fi 连接；Wi-Fi 模式无需开启 USB 调试
+- 双指滚动与捏合可在触点持续按住时互相切换
+
+## 下载
+
+- Android 最新安装包： [miaokon-sj 1.2.1](https://github.com/changjianghome/miaokon/releases/latest)
+- Mac 与 iPhone：从本仓库源码自行构建；开发者签名与本机安装包保留在私有归档中。
 
 ## 项目结构
 

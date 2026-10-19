@@ -43,6 +43,8 @@ final class Gestures {
     private var initialPinchDistance: CGFloat = 0
     private var lastPinchDistance: CGFloat = 0
     private var pinchDistanceAccumulator: CGFloat = 0
+    private var alternateGestureDistance: CGFloat = 0
+    private var alternateGestureSignedDistance: CGFloat = 0
     private let pinchStepBaseDistance: CGFloat = 30
     private var lastPinchHapticAt: TimeInterval = 0
     private let pinchHapticMinimumInterval: TimeInterval = 0.55
@@ -109,10 +111,12 @@ final class Gestures {
         touches[id] = T(origin: p, last: p, beganAt: now)
         maxTouchesInGesture = max(maxTouchesInGesture, touches.count)
         onDebug?("gesture=\(gestureID) touch+ id=\(id) count=\(touches.count) mode=\(modeName(mode)) from=\(modeName(previousMode)) point=\(Int(p.x)),\(Int(p.y))")
-        if touches.count == 2, mode == .twoFingerCandidate {
+        if touches.count == 2, (mode == .twoFingerCandidate || mode == .twoFingerScroll) {
             initialPinchDistance = distanceBetweenTouches()
             lastPinchDistance = initialPinchDistance
             pinchDistanceAccumulator = 0
+            alternateGestureDistance = 0
+            alternateGestureSignedDistance = 0
         }
         onHUD?(hudLabel, touches.count)
     }
@@ -131,6 +135,7 @@ final class Gestures {
             deltas.append(d)
         }
         guard !deltas.isEmpty else { return }
+        var suppressTwoFingerOutput = false
         if mode == .singleCandidate, touches.count == 1, singleFingerDragEnabled,
            ProcessInfo.processInfo.systemUptime - gestureStartedAt >= singleFingerLongPressDuration {
             beginSingleFingerDrag()
@@ -168,17 +173,24 @@ final class Gestures {
                 mode = .twoFingerPinch
                 lastPinchDistance = distanceBetweenTouches()
                 pinchDistanceAccumulator = 0
+                alternateGestureDistance = 0
+                alternateGestureSignedDistance = 0
                 lastPinchHapticAt = ProcessInfo.processInfo.systemUptime
                 haptic(.medium)
                 emitPinchDistance(distanceDelta)
                 onHUD?(hudLabel, touches.count)
             } else if centerTravel >= 12, abs(distanceDelta) <= max(16, centerTravel * 1.8) {
                 mode = .twoFingerScroll
+                lastPinchDistance = distanceBetweenTouches()
+                alternateGestureDistance = 0
+                alternateGestureSignedDistance = 0
                 haptic(.medium)
                 onHUD?(hudLabel, touches.count)
             } else if maxFingerTravel > tapMovementThreshold {
                 twoFingerMovedBeyondTap = true
             }
+        } else if (mode == .twoFingerScroll || mode == .twoFingerPinch), touches.count == 2 {
+            suppressTwoFingerOutput = updateTwoFingerMode(deltas)
         } else if mode == .fourFingerScrollCandidate, touches.count == 4 {
             let points = Array(touches.values)
             let dx = points.reduce(0.0) { $0 + Double($1.last.x - $1.origin.x) } / 4.0
@@ -229,6 +241,7 @@ final class Gestures {
             onHUD?(hudLabel, touches.count)
             return
         }
+        if suppressTwoFingerOutput { return }
         guard deltas.contains(where: { hypot($0.x, $0.y) > 0.1 }) else { return }
 
         switch mode {
@@ -375,6 +388,62 @@ final class Gestures {
             lastPinchHapticAt = now
             haptic(.light)
         }
+    }
+
+    /// Keep recognizing motion during a two-finger touch so pinch and scroll can switch without lifting.
+    private func updateTwoFingerMode(_ deltas: [CGPoint]) -> Bool {
+        let distance = distanceBetweenTouches()
+        let distanceDelta = distance - lastPinchDistance
+        let centerDX = deltas.reduce(0.0) { $0 + Double($1.x) } / 2.0
+        let centerDY = deltas.reduce(0.0) { $0 + Double($1.y) } / 2.0
+        let centerTravel = CGFloat(hypot(centerDX, centerDY))
+        let switchThreshold: CGFloat = 12
+
+        if mode == .twoFingerScroll {
+            lastPinchDistance = distance
+            if abs(distanceDelta) > max(0.25, centerTravel * 1.25) {
+                alternateGestureDistance += abs(distanceDelta)
+                alternateGestureSignedDistance += distanceDelta
+                if abs(alternateGestureSignedDistance) >= switchThreshold {
+                    mode = .twoFingerPinch
+                    pinchDistanceAccumulator = 0
+                    alternateGestureDistance = 0
+                    let accumulatedDistance = alternateGestureSignedDistance
+                    alternateGestureSignedDistance = 0
+                    lastPinchDistance = distance
+                    haptic(.medium)
+                    emitPinchDistance(accumulatedDistance)
+                    onDebug?("gesture=\(gestureID) switch=scroll_to_pinch accumulated=\(Int(accumulatedDistance))pt")
+                    onHUD?(hudLabel, touches.count)
+                }
+                return true
+            }
+            alternateGestureDistance = 0
+            alternateGestureSignedDistance = 0
+            return false
+        }
+
+        if centerTravel > max(0.25, abs(distanceDelta) * 1.25) {
+            alternateGestureDistance += centerTravel
+            // Re-anchor while suppressing candidate scroll so it is not later emitted as zoom.
+            lastPinchDistance = distance
+            if alternateGestureDistance >= switchThreshold {
+                send?(Ev(k: .pinch, p: .ended, dbg: "two-finger pinch changed to scroll"))
+                mode = .twoFingerScroll
+                pinchDistanceAccumulator = 0
+                alternateGestureDistance = 0
+                alternateGestureSignedDistance = 0
+                haptic(.medium)
+                onDebug?("gesture=\(gestureID) switch=pinch_to_scroll")
+                onHUD?(hudLabel, touches.count)
+                return false
+            }
+            return true
+        }
+
+        alternateGestureDistance = 0
+        alternateGestureSignedDistance = 0
+        return false
     }
 
     private func haptic(_ style: UIImpactFeedbackGenerator.FeedbackStyle, force: Bool = false) {

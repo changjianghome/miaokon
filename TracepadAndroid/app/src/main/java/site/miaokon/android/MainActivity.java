@@ -3,6 +3,7 @@ package site.miaokon.android;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
@@ -28,7 +29,9 @@ public final class MainActivity extends Activity implements UsbTcpServer.Listene
     private final Handler handler = new Handler(Looper.getMainLooper());
     private TouchpadSettings settings;
     private UsbTcpServer transport;
-    private TextView statusView;
+    private Button settingsButton;
+    private TextView settingsStatusView;
+    private String connectionState = "正在启动 Wi-Fi 服务…";
     private String pendingTestId;
 
     private final Runnable heartbeat = new Runnable() {
@@ -56,7 +59,10 @@ public final class MainActivity extends Activity implements UsbTcpServer.Listene
         FrameLayout root = new FrameLayout(this);
         padView = new GesturePadView(this, transport, settings, this);
         root.addView(padView, new FrameLayout.LayoutParams(-1, -1));
-        root.addView(createToolbar(), new FrameLayout.LayoutParams(-1, dp(48), Gravity.TOP));
+        FrameLayout.LayoutParams settingsLayout = new FrameLayout.LayoutParams(
+                -2, dp(48), Gravity.TOP | Gravity.RIGHT);
+        settingsLayout.setMargins(0, dp(6), dp(8), 0);
+        root.addView(createToolbar(), settingsLayout);
         setContentView(root);
 
         transport.start();
@@ -65,25 +71,13 @@ public final class MainActivity extends Activity implements UsbTcpServer.Listene
     }
 
     private View createToolbar() {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(10), dp(4), dp(10), dp(4));
-        row.setBackgroundColor(0xDD0D141C);
-
-        statusView = new TextView(this);
-        statusView.setText("USB/Wi-Fi 服务启动中…");
-        statusView.setTextColor(Color.WHITE);
-        statusView.setTextSize(13);
-        row.addView(statusView, new LinearLayout.LayoutParams(0, -1, 1f));
-
-        row.addView(toolbarButton("设置", v -> showSettings()));
-        row.addView(toolbarButton("重连", v -> {
-            if (transport != null) transport.restart();
-        }));
-        row.addView(toolbarButton("测试", v -> testConnection()));
-        row.addView(toolbarButton("震动", v -> vibrate(2, true)));
-        return row;
+        settingsButton = toolbarButton("设置", v -> showSettings());
+        settingsButton.setMinWidth(dp(76));
+        settingsButton.setMinimumWidth(dp(76));
+        settingsButton.setBackgroundTintList(ColorStateList.valueOf(0xFFD64545));
+        settingsButton.setTextColor(Color.WHITE);
+        updateConnectionIndicator();
+        return settingsButton;
     }
 
     private Button toolbarButton(String title, View.OnClickListener listener) {
@@ -102,6 +96,20 @@ public final class MainActivity extends Activity implements UsbTcpServer.Listene
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(20), dp(12), dp(20), dp(12));
         content.setBackgroundColor(0xFF18232E);
+
+        settingsStatusView = new TextView(this);
+        settingsStatusView.setTextColor(Color.WHITE);
+        settingsStatusView.setTextSize(14);
+        settingsStatusView.setPadding(0, dp(4), 0, dp(10));
+        settingsStatusView.setText(connectionState);
+        content.addView(settingsStatusView);
+        addActionButton(content, "重连", v -> {
+            connectionState = "正在重新连接…";
+            updateSettingsStatus();
+            if (transport != null) transport.restart();
+        });
+        addActionButton(content, "测试连接", v -> testConnection());
+        addActionButton(content, "测试震动", v -> vibrate(2, true));
 
         addLogSlider(content, "鼠标左右速度", settings.horizontalSpeed, 0.1, 1.0, 8.0,
                 value -> { settings.horizontalSpeed = value; settings.save(); });
@@ -128,11 +136,24 @@ public final class MainActivity extends Activity implements UsbTcpServer.Listene
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(content);
-        new AlertDialog.Builder(this)
+        AlertDialog settingsDialog = new AlertDialog.Builder(this)
                 .setTitle("miaokon-sj 设置")
                 .setView(scroll)
                 .setPositiveButton("完成", (dialog, which) -> dialog.dismiss())
                 .show();
+        settingsDialog.setOnDismissListener(ignored -> settingsStatusView = null);
+    }
+
+    private void addActionButton(LinearLayout parent, String title, View.OnClickListener listener) {
+        Button button = toolbarButton(title, listener);
+        button.setTextSize(14);
+        button.setMinHeight(dp(44));
+        button.setMinimumHeight(dp(44));
+        button.setTextColor(Color.WHITE);
+        button.setBackgroundTintList(ColorStateList.valueOf(0xFF33495C));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(44));
+        params.bottomMargin = dp(6);
+        parent.addView(button, params);
     }
 
     private interface ValueChanged { void onChange(double value); }
@@ -191,27 +212,44 @@ public final class MainActivity extends Activity implements UsbTcpServer.Listene
 
     private void testConnection() {
         pendingTestId = UUID.randomUUID().toString();
-        statusView.setText("发送连接测试…");
+        connectionState = "发送连接测试…";
+        updateSettingsStatus();
         transport.send("pause", null, null, null, null, pendingTestId, "manual_connection_test");
         String id = pendingTestId;
         handler.postDelayed(() -> {
-            if (id.equals(pendingTestId) && "发送连接测试…".contentEquals(statusView.getText())) {
-                statusView.setText("未收到 Mac 回执；检查电脑端是否运行");
+            if (id.equals(pendingTestId) && "发送连接测试…".equals(connectionState)) {
+                connectionState = "未收到 Mac 回执；检查电脑端是否运行";
+                updateSettingsStatus();
             }
         }, 3_000);
     }
 
     @Override
     public void onState(String state) {
-        if (statusView != null) statusView.setText(state);
+        connectionState = state;
+        updateConnectionIndicator();
+        updateSettingsStatus();
     }
 
     @Override
     public void onAck(String id) {
         if (id != null && id.equals(pendingTestId)) {
             pendingTestId = null;
-            if (statusView != null) statusView.setText("Mac 已回应，连接正常 ✓");
+            connectionState = "Mac 已回应，连接正常 ✓";
+            updateConnectionIndicator();
+            updateSettingsStatus();
         }
+    }
+
+    private void updateConnectionIndicator() {
+        if (settingsButton == null) return;
+        boolean connected = transport != null && transport.isConnected();
+        settingsButton.setBackgroundTintList(ColorStateList.valueOf(
+                connected ? 0xFF238B57 : 0xFFD64545));
+    }
+
+    private void updateSettingsStatus() {
+        if (settingsStatusView != null) settingsStatusView.setText(connectionState);
     }
 
     @Override

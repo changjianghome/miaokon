@@ -23,7 +23,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>MiaokonAndroidWiFiDefault</key>
-	<false/>
+	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>miaokon-mac 在你启用 Android Wi-Fi 连接时搜索并连接同一局域网内的 miaokon-sj 手机。</string>
 	<key>NSBonjourServices</key>
