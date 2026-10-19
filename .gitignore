@@ -1,0 +1,24 @@
+# macOS / Xcode / SwiftPM
+.DS_Store
+**/.build/
+**/DerivedData/
+**/build/
+*.xcuserstate
+xcuserdata/
+*.ipa
+*.dmg
+*.mobileprovision
+*.p12
+*.cer
+.env
+.env.*
+
+# Local packages and diagnostic notes may contain machine-specific data
+dist/
+release_v*/
+release_sideload_v*/
+.learnings/
+DEBUGGING_NOTES.md
+tools/previews/
+TracepadMac/Resources/TracepadMac.icns
+TracepadMac/Resources/TracepadMac.iconset/
