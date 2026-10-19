@@ -18,6 +18,8 @@ final class Server {
     private var bridgeRetryWorkItem: DispatchWorkItem?
     private var retryDelay: TimeInterval = 1
     private var receiveBuffer = Data()
+    private var pendingPinchSteps: Int32 = 0
+    private var pinchFlushWorkItem: DispatchWorkItem?
     private var adbExecutable: String?
     private var adbSerial: String?
     private var deviceLabel = "手机"
@@ -286,7 +288,42 @@ final class Server {
                 if let error { log("[usb] 回执发送失败：\(error)") }
             })
         }
-        DispatchQueue.main.async { self.apply(ev) }
+        DispatchQueue.main.async {
+            if ev.k == .pinch {
+                self.receivePinch(ev)
+            } else {
+                self.apply(ev)
+            }
+        }
+    }
+
+    private func receivePinch(_ ev: Event) {
+        if ev.p == .ended || ev.p == .cancelled {
+            pinchFlushWorkItem?.cancel()
+            pinchFlushWorkItem = nil
+            pendingPinchSteps = 0
+            onEvent?(ev)
+            log("[pinch] gesture ended; pending zoom steps discarded")
+            return
+        }
+
+        pendingPinchSteps += Int32((ev.v ?? 0).rounded())
+        onEvent?(ev)
+        schedulePinchFlushIfNeeded()
+    }
+
+    private func schedulePinchFlushIfNeeded() {
+        guard pendingPinchSteps != 0, pinchFlushWorkItem == nil else { return }
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pinchFlushWorkItem = nil
+            let batch = max(-2, min(2, self.pendingPinchSteps))
+            self.pendingPinchSteps -= batch
+            self.mouse.zoom(steps: batch)
+            self.schedulePinchFlushIfNeeded()
+        }
+        pinchFlushWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.025, execute: workItem)
     }
 
     private func apply(_ ev: Event) {
@@ -308,7 +345,7 @@ final class Server {
         case .doubleTap: mouse.doubleTap()
         case .rightClick: mouse.tap(button: .right)
         case .scroll: mouse.scroll(dx: dx, dy: dy)
-        case .pinch: mouse.zoom(steps: Int32(v.rounded()))
+        case .pinch: break // Coalesced and released by receivePinch(_:).
         case .rotate: break
         case .threeSwipe, .fourSwipe:
             if v != 0 { mouse.systemSwipe(k, direction: v) }

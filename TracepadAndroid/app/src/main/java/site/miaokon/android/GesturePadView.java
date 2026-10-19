@@ -155,8 +155,17 @@ final class GesturePadView extends View {
             if (mode == Mode.SINGLE_CANDIDATE) mode = Mode.TWO_CANDIDATE;
             else if (mode == Mode.SINGLE_MOVE) mode = Mode.TWO_SCROLL;
             else mode = Mode.IGNORE;
-        } else if (priorCount == 2 && mode == Mode.TWO_CANDIDATE) {
-            mode = Mode.THREE_CANDIDATE;
+        } else if (priorCount == 2) {
+            if (mode == Mode.TWO_CANDIDATE) {
+                mode = Mode.THREE_CANDIDATE;
+            } else {
+                if (mode == Mode.TWO_PINCH) {
+                    transport.send("pinch", null, null, 0.0, "cancelled",
+                            null, "two-finger pinch cancelled by third touch");
+                    pinchAccumulator = 0;
+                }
+                mode = Mode.IGNORE;
+            }
         } else if (priorCount == 3 && mode == Mode.THREE_CANDIDATE) {
             mode = Mode.FOUR_CANDIDATE;
         } else {
@@ -314,6 +323,12 @@ final class GesturePadView extends View {
         if (wasCancelled) cancelled = true;
         long now = android.os.SystemClock.uptimeMillis();
         float travel = (float) Math.hypot(point.lastX - point.originX, point.lastY - point.originY);
+        if (mode == Mode.TWO_PINCH) {
+            transport.send("pinch", null, null, 0.0, cancelled ? "cancelled" : "ended",
+                    null, "two-finger pinch ended");
+            pinchAccumulator = 0;
+            mode = Mode.IGNORE;
+        }
         if (mode == Mode.FOUR_SPACE) {
             transport.send("spaceSwipe", deltaX(spaceProgress), null,
                     cancelled ? 0.0 : lastSpaceDelta * 100.0,
@@ -423,12 +438,12 @@ final class GesturePadView extends View {
         double stepDistance = 30.0 / speed;
         boolean emitted = false;
         while (pinchAccumulator >= stepDistance) {
-            transport.send("pinch", null, null, 1.0, null, null, null);
+            transport.send("pinch", null, null, 1.0, "changed", null, null);
             pinchAccumulator -= stepDistance;
             emitted = true;
         }
         while (pinchAccumulator <= -stepDistance) {
-            transport.send("pinch", null, null, -1.0, null, null, null);
+            transport.send("pinch", null, null, -1.0, "changed", null, null);
             pinchAccumulator += stepDistance;
             emitted = true;
         }
