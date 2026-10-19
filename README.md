@@ -1,6 +1,6 @@
 # miaokon — PUBLIC SOURCE
 
-> **PUBLIC / 公开源码仓库**。这里只维护清理后的源码；构建过程、个人签名信息和旧安装包保存在独立的私有历史仓库。
+> **PUBLIC / 公开源码仓库**。维护清理后的源码；当前可公开分发的安装包通过 GitHub Releases 提供。详细构建过程、个人签名信息和历史安装包保存在独立的私有仓库。
 
 把 iPhone 或 Android 手机当作 Mac 的多点触控板。iPhone 使用 USB；Android 可选 USB 或同一局域网 Wi-Fi。手机负责识别手势，Mac 端将手势转换成鼠标操作。
 
@@ -16,7 +16,10 @@
 ## 下载
 
 - Android 最新安装包： [miaokon-sj 1.2.1](https://github.com/changjianghome/miaokon/releases/latest)
-- Mac 与 iPhone：从本仓库源码自行构建；开发者签名与本机安装包保留在私有归档中。
+- Mac Wi-Fi 安装包： [miaokon-mac 2.2.1 DMG](https://github.com/changjianghome/miaokon/releases/latest)
+- iPhone：从本仓库源码自行构建，并在 Xcode 配置自己的签名团队。
+
+Mac DMG 中的 App 使用 ad-hoc 签名，不包含发布者证书身份。首次打开时，macOS 可能要求在“系统设置 → 隐私与安全性”手动允许。
 
 ## 项目结构
 
