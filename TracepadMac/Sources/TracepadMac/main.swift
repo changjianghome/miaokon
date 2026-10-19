@@ -89,20 +89,9 @@ log("[main] 启动 \(Date()) 事件发送权限：\(eventAccess ? "已授权" : 
 let mouse = Mouse()
 let injectOK = mouse.selfTest()
 log("[main] 注入自检：\(injectOK ? "正常" : (eventAccess ? "失败（系统光标未移动）" : "失败（事件发送权限未授权）"))")
-let server = Server(mouse: mouse, port: port)
-do {
-    try server.start()
-} catch {
-    log("[main] 无法启动 USB 转发：\(error.localizedDescription)")
-    exit(1)
-}
-
-// USB 桥接或手机 listener 不可用时，在日志和菜单栏里明确显示
-DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-    if !server.isReady {
-        log("[main] ⚠️ USB 通道未建立；检查手机 USB 线、信任/USB 调试授权和 miaokon-sj 前台状态")
-    }
-}
+let androidServer = Server(mouse: mouse, port: port, remotePort: 7311, bridgeKind: .android)
+let iPhonePort = port == UInt16.max ? port - 1 : port + 1
+let iPhoneServer = Server(mouse: mouse, port: iPhonePort, remotePort: 7311, bridgeKind: .iPhone)
 
 // 菜单栏状态：图标 + 端口 + 当前连接数 + 权限提示
 let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -115,9 +104,12 @@ if let button = statusItem.button {
     }
 }
 let menu = NSMenu()
-let info = NSMenuItem(title: "USB · 等待连接", action: nil, keyEquivalent: "")
-info.isEnabled = false
-menu.addItem(info)
+let androidInfo = NSMenuItem(title: "Android · 正在启动…", action: nil, keyEquivalent: "")
+androidInfo.isEnabled = false
+menu.addItem(androidInfo)
+let iPhoneInfo = NSMenuItem(title: "iPhone · 正在启动…", action: nil, keyEquivalent: "")
+iPhoneInfo.isEnabled = false
+menu.addItem(iPhoneInfo)
 let permissionGranted = CGPreflightPostEventAccess()
 let permState = NSMenuItem(title: permissionGranted ? "设备控制和数据访问：已授权" : "设备控制和数据访问：未授权（点下面打开授权页面）", action: nil, keyEquivalent: "")
 permState.isEnabled = false
@@ -132,13 +124,39 @@ menu.addItem(loginItemController.menuItem)
 menu.addItem(NSMenuItem(title: "退出", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 statusItem.menu = menu
 
-let infoItem = info
-server.onClientState = { s in
-    infoItem.title = "USB · " + s
+androidServer.onClientState = { state in
+    DispatchQueue.main.async { androidInfo.title = "Android · " + state }
 }
-server.onEvent = { ev in
-    if let k = ev.k, k != .move && k != .scroll && k != .drag {
-        log("[event] \(k.rawValue) v=\(ev.v ?? 0)")
+iPhoneServer.onClientState = { state in
+    DispatchQueue.main.async { iPhoneInfo.title = "iPhone · " + state }
+}
+for server in [androidServer, iPhoneServer] {
+    server.onEvent = { ev in
+        if let k = ev.k, k != .move && k != .scroll && k != .drag {
+            log("[event] \(k.rawValue) v=\(ev.v ?? 0)")
+        }
+    }
+}
+
+do {
+    try androidServer.start()
+} catch {
+    androidInfo.title = "Android · 启动失败：\(error.localizedDescription)"
+    log("[main] Android USB 转发启动失败：\(error.localizedDescription)")
+}
+do {
+    try iPhoneServer.start()
+} catch {
+    iPhoneInfo.title = "iPhone · 启动失败：\(error.localizedDescription)"
+    log("[main] iPhone USB 转发启动失败：\(error.localizedDescription)")
+}
+
+DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+    if !androidServer.isReady {
+        log("[main] Android USB 通道尚未就绪；确认 miaokon-sj 前台运行")
+    }
+    if !iPhoneServer.isReady {
+        log("[main] iPhone USB 通道尚未就绪；确认 miaokon-sj 前台运行和 USB 信任")
     }
 }
 
@@ -147,7 +165,8 @@ let terminationObserver = NotificationCenter.default.addObserver(
     object: app,
     queue: .main
 ) { _ in
-    server.stop()
+    androidServer.stop()
+    iPhoneServer.stop()
 }
 
 // 每 3 秒刷新一次权限状态（用户授权后无需重启程序）
@@ -174,6 +193,6 @@ extension NSWorkspace {
     }
 }
 
-log("[main] 就绪，等待 iPhone USBMux 或 Android ADB 有线连接")
+log("[main] 就绪，Android ADB 与 iPhone USBMux 独立运行，可同时连接")
 app.run()
 NotificationCenter.default.removeObserver(terminationObserver)

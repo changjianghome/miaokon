@@ -13,6 +13,8 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /** Android side of the existing four-byte length-prefixed JSON TCP protocol. */
 final class UsbTcpServer {
@@ -25,6 +27,11 @@ final class UsbTcpServer {
     }
 
     private final Handler main = new Handler(Looper.getMainLooper());
+    private final ExecutorService writer = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "miaokon-usb-writer");
+        thread.setDaemon(true);
+        return thread;
+    });
     private final Listener listener;
     private volatile boolean running;
     private volatile ServerSocket serverSocket;
@@ -76,7 +83,9 @@ final class UsbTcpServer {
         } catch (Exception ignored) {
             return;
         }
-        writeFrame(event.toString());
+        if (output == null) return;
+        String frame = event.toString();
+        writer.execute(() -> writeFrame(frame));
     }
 
     private synchronized void writeFrame(String json) {

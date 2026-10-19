@@ -2,9 +2,16 @@ import Foundation
 import Network
 import AppKit
 
-/// USBMux/iproxy 把 Mac 本机端口转发到 iPhone listener；Mac 主动连入该通道。
+enum USBBridgeKind {
+    case android
+    case iPhone
+}
+
+/// Each phone gets its own host port; both transports feed the same Mac mouse event handler.
 final class Server {
     let port: UInt16
+    private let remotePort: UInt16
+    private let bridgeKind: USBBridgeKind
     private var connection: NWConnection?
     private var bridgeProcess: Process?
     private var retryWorkItem: DispatchWorkItem?
@@ -21,9 +28,11 @@ final class Server {
     var onClientState: ((String) -> Void)?
     var onEvent: ((Event) -> Void)?
 
-    init(mouse: Mouse, port: UInt16) {
+    init(mouse: Mouse, port: UInt16, remotePort: UInt16 = 7311, bridgeKind: USBBridgeKind) {
         self.mouse = mouse
         self.port = port
+        self.remotePort = remotePort
+        self.bridgeKind = bridgeKind
     }
 
     deinit {
@@ -54,53 +63,79 @@ final class Server {
     }
 
     private func configureBridge() throws {
-        if let adb = findADB(), let devices = androidDevices(adb: adb) {
-            adbExecutable = adb
-            if let serial = devices.authorized.first {
-                if let process = bridgeProcess, process.isRunning {
-                    process.terminate()
-                    process.waitUntilExit()
-                }
-                bridgeProcess = nil
-                _ = run(adb, ["-s", serial, "forward", "--remove", "tcp:\(port)"])
-                let result = run(adb, ["-s", serial, "forward", "tcp:\(port)", "tcp:\(port)"])
-                guard result.status == 0 else {
-                    throw NSError(domain: "TracepadUSB", code: 2, userInfo: [
-                        NSLocalizedDescriptionKey: "无法建立 Android ADB USB 转发：\(result.output.trimmingCharacters(in: .whitespacesAndNewlines))"
-                    ])
-                }
-                adbSerial = serial
-                deviceLabel = "Android 手机"
-                log("[usb] adb forward 已启动：Mac 127.0.0.1:\(port) → Android localhost:\(port)")
-                connectToPhone()
-                return
+        switch bridgeKind {
+        case .android:
+            try configureAndroidBridge()
+        case .iPhone:
+            try configureIPhoneBridge()
+        }
+    }
+
+    private func configureAndroidBridge() throws {
+        guard let adb = findADB() else {
+            onClientState?("未找到 Android ADB，正在等待…")
+            scheduleBridgeRetry()
+            return
+        }
+        guard let devices = androidDevices(adb: adb) else {
+            onClientState?("Android ADB 暂不可用，正在重试…")
+            scheduleBridgeRetry()
+            return
+        }
+        adbExecutable = adb
+        if let serial = devices.authorized.first {
+            if let process = bridgeProcess, process.isRunning {
+                process.terminate()
+                process.waitUntilExit()
             }
-            if !devices.unauthorized.isEmpty {
-                onClientState?("检测到 Android，但未授权 USB 调试；请在手机弹窗中允许此电脑")
-                log("[usb] Android USB 调试尚未授权，等待设备授权")
+            bridgeProcess = nil
+            _ = run(adb, ["-s", serial, "forward", "--remove", "tcp:\(port)"])
+            let result = run(adb, ["-s", serial, "forward", "tcp:\(port)", "tcp:\(remotePort)"])
+            guard result.status == 0 else {
+                onClientState?("Android ADB 转发失败，正在重试…")
+                log("[usb] Android ADB 转发失败：\(result.output.trimmingCharacters(in: .whitespacesAndNewlines))")
                 scheduleBridgeRetry()
                 return
             }
+            adbSerial = serial
+            deviceLabel = "Android 手机"
+            log("[usb] adb forward 已启动：Mac 127.0.0.1:\(port) → Android localhost:\(remotePort)")
+            connectToPhone()
+            return
         }
+        if !devices.unauthorized.isEmpty {
+            onClientState?("检测到 Android，但未授权 USB 调试；请在手机弹窗中允许此电脑")
+            log("[usb] Android USB 调试尚未授权，等待设备授权")
+            scheduleBridgeRetry()
+            return
+        }
+        onClientState?("等待 Android 手机 USB 连接…")
+        scheduleBridgeRetry()
+    }
 
+    private func configureIPhoneBridge() throws {
         let candidates = ["/opt/homebrew/bin/iproxy", "/usr/local/bin/iproxy"]
         guard let executable = candidates.first(where: FileManager.default.isExecutableFile(atPath:)) else {
+            onClientState?("找不到 iproxy；请安装 libusbmuxd")
             throw NSError(domain: "TracepadUSB", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "找不到 Android ADB 或 iPhone iproxy。Android 请安装 Android platform-tools 并开启 USB 调试；iPhone 请运行：brew install libusbmuxd"
+                NSLocalizedDescriptionKey: "找不到 iPhone iproxy；请运行：brew install libusbmuxd"
             ])
         }
 
+        if let process = bridgeProcess, process.isRunning {
+            connectToPhone()
+            return
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
-        // -l 强制选择 USB；-s 显式限制监听只在本机回环地址。
-        process.arguments = ["-l", "-s", "127.0.0.1", "\(port):\(port)"]
+        process.arguments = ["-l", "-s", "127.0.0.1", "\(port):\(remotePort)"]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
         bridgeProcess = process
         adbSerial = nil
         deviceLabel = "iPhone"
-        log("[usb] iproxy 已启动：USB → 127.0.0.1:\(port) → iPhone:\(port)")
+        log("[usb] iproxy 已启动：USB → 127.0.0.1:\(port) → iPhone:\(remotePort)")
         connectToPhone()
     }
 

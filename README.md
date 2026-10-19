@@ -65,6 +65,8 @@ APK 位于 `TracepadAndroid/app/build/outputs/apk/debug/app-debug.apk`。首次�
 2. 启动 Mac 接收端并授予“辅助功能/设备控制”权限。
 3. 启动对应的手机端并保持前台，看到 USB 已连接后即可使用。iPhone 走 USBMux/iproxy，Android 走 ADB `forward`。
 
+Mac 端为两种手机分别运行独立的 USB 通道：Android 使用 Mac 本机端口 `7311`，iPhone 使用 Mac 本机端口 `7312` 并转发到手机端口 `7311`。两端可以同时连接；iOS 与 Android 手机工程仍独立构建和调试。
+
 ## 开源与隐私
 
 本仓库只包含源码、必要图标资源和构建说明，不包含签名证书、开发者团队 ID、设备 UDID、个人构建产物或调试日志。每位开发者需在自己的 Xcode 中设置签名团队。
