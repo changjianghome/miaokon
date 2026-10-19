@@ -17,7 +17,7 @@
 
 - Android 最新安装包： [miaokon-sj 1.2.1](https://github.com/changjianghome/miaokon/releases/latest)
 - Mac Wi-Fi 安装包： [miaokon-mac 2.2.1 DMG](https://github.com/changjianghome/miaokon/releases/latest)
-- iPhone：从本仓库源码自行构建，并在 Xcode 配置自己的签名团队。
+- iPhone 自签名包： [miaokon-sj 2.0 未签名 IPA](https://github.com/changjianghome/miaokon/releases/latest)。需使用自己的 Apple ID/开发者证书重新签名后安装；未签名 IPA 不能直接安装。
 
 Mac DMG 中的 App 使用 ad-hoc 签名，不包含发布者证书身份。首次打开时，macOS 可能要求在“系统设置 → 隐私与安全性”手动允许。
 
