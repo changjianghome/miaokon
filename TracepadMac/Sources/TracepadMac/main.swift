@@ -80,6 +80,25 @@ final class LoginItemController: NSObject {
     }
 }
 
+final class AndroidWiFiController: NSObject {
+    private let server: Server
+    let menuItem = NSMenuItem(title: "Android 改用 Wi-Fi（无需 USB 调试）", action: #selector(toggle(_:)), keyEquivalent: "")
+
+    init(server: Server, wifiEnabled: Bool) {
+        self.server = server
+        super.init()
+        menuItem.target = self
+        menuItem.state = wifiEnabled ? .on : .off
+    }
+
+    @objc private func toggle(_ sender: NSMenuItem) {
+        let enabled = sender.state != .on
+        sender.state = enabled ? .on : .off
+        server.setAndroidWiFiEnabled(enabled)
+        log("[android] 连接模式切换为\(enabled ? "Wi-Fi" : "USB/ADB")")
+    }
+}
+
 let loginItemController = LoginItemController()
 
 // 请求 CGEvent 投递权限。macOS 27 将该权限显示为“设备控制和数据访问”。
@@ -89,7 +108,10 @@ log("[main] 启动 \(Date()) 事件发送权限：\(eventAccess ? "已授权" : 
 let mouse = Mouse()
 let injectOK = mouse.selfTest()
 log("[main] 注入自检：\(injectOK ? "正常" : (eventAccess ? "失败（系统光标未移动）" : "失败（事件发送权限未授权）"))")
-let androidServer = Server(mouse: mouse, port: port, remotePort: 7311, bridgeKind: .android)
+let defaultAndroidWiFi = Bundle.main.object(forInfoDictionaryKey: "MiaokonAndroidWiFiDefault") as? Bool ?? false
+let androidServer = Server(mouse: mouse, port: port, remotePort: 7311, bridgeKind: .android,
+                           androidWiFiEnabled: defaultAndroidWiFi)
+let androidWiFiController = AndroidWiFiController(server: androidServer, wifiEnabled: defaultAndroidWiFi)
 let iPhonePort = port == UInt16.max ? port - 1 : port + 1
 let iPhoneServer = Server(mouse: mouse, port: iPhonePort, remotePort: 7311, bridgeKind: .iPhone)
 
@@ -107,6 +129,7 @@ let menu = NSMenu()
 let androidInfo = NSMenuItem(title: "Android · 正在启动…", action: nil, keyEquivalent: "")
 androidInfo.isEnabled = false
 menu.addItem(androidInfo)
+menu.addItem(androidWiFiController.menuItem)
 let iPhoneInfo = NSMenuItem(title: "iPhone · 正在启动…", action: nil, keyEquivalent: "")
 iPhoneInfo.isEnabled = false
 menu.addItem(iPhoneInfo)
@@ -153,7 +176,8 @@ do {
 
 DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
     if !androidServer.isReady {
-        log("[main] Android USB 通道尚未就绪；确认 miaokon-sj 前台运行")
+        let mode = defaultAndroidWiFi ? "Wi-Fi" : "USB"
+        log("[main] Android \(mode) 通道尚未就绪；确认 miaokon-sj 前台运行")
     }
     if !iPhoneServer.isReady {
         log("[main] iPhone USB 通道尚未就绪；确认 miaokon-sj 前台运行和 USB 信任")
@@ -193,6 +217,6 @@ extension NSWorkspace {
     }
 }
 
-log("[main] 就绪，Android ADB 与 iPhone USBMux 独立运行，可同时连接")
+log("[main] 就绪，Android \(defaultAndroidWiFi ? "Wi-Fi Bonjour" : "ADB USB") 与 iPhone USBMux 独立运行，可同时连接")
 app.run()
 NotificationCenter.default.removeObserver(terminationObserver)

@@ -2,7 +2,7 @@
 
 > **PUBLIC / 公开源码仓库**。这里只维护清理后的源码；构建过程、个人签名信息和旧安装包保存在独立的私有历史仓库。
 
-把 iPhone 或 Android 手机当作 Mac 的多点触控板，通过 USB 有线连接。手机负责识别手势，Mac 端将手势转换成鼠标操作。
+把 iPhone 或 Android 手机当作 Mac 的多点触控板。iPhone 使用 USB；Android 可选 USB 或同一局域网 Wi-Fi。手机负责识别手势，Mac 端将手势转换成鼠标操作。
 
 ## 功能
 
@@ -10,7 +10,7 @@
 - 双指捏合缩放
 - 三指拖拽、四指桌面切换与 Mission Control
 - 独立调节鼠标、滚动和缩放速度，支持触觉反馈
-- 手机与 Mac 之间只通过 USB 连接
+- Android 可通过 USB/ADB 或 Wi-Fi 连接；Wi-Fi 模式无需开启 USB 调试
 
 ## 项目结构
 
@@ -29,7 +29,8 @@ tools/             图标生成工具
 - Xcode（构建 iOS 端）
 - JDK 17 与 Android SDK Platform 35（构建 Android 端）
 - Homebrew 的 `libusbmuxd`（提供 iPhone USB 转发 `iproxy`）
-- Android `platform-tools`（提供 `adb` USB 转发）
+- Android USB 模式需要 `platform-tools`（提供 `adb` 转发）；Wi-Fi 模式不依赖 ADB
+- Wi-Fi 模式需要手机和 Mac 接入同一局域网
 
 安装 USB 工具：
 
@@ -42,9 +43,11 @@ brew install libusbmuxd
 ### Mac 端
 
 ```sh
-cd TracepadMac
-swift build -c release
+./tools/package-mac-app.sh ./dist/miaokon-mac-usb.app usb
+./tools/package-mac-app.sh ./dist/miaokon-mac-wifi.app wifi
 ```
+
+若已安装 Apple Development 签名证书，可设置 `CODESIGN_IDENTITY` 环境变量以保留系统授权身份；否则脚本使用本地临时签名。
 
 ### iPhone 端
 
@@ -61,11 +64,11 @@ APK 位于 `TracepadAndroid/app/build/outputs/apk/debug/app-debug.apk`。首次�
 
 ## 使用
 
-1. 用 USB 线连接 iPhone 或 Android 手机和 Mac；iPhone 确认信任，Android 开启 USB 调试并授权此 Mac。
+1. iPhone 用 USB 连接 Mac 并确认信任；Android 可用 USB（开启 USB 调试并授权此 Mac）或 Wi-Fi（手机和 Mac 接入同一局域网）。
 2. 启动 Mac 接收端并授予“辅助功能/设备控制”权限。
-3. 启动对应的手机端并保持前台，看到 USB 已连接后即可使用。iPhone 走 USBMux/iproxy，Android 走 ADB `forward`。
+3. 启动对应的手机端并保持在前台。Android Wi-Fi 模式下，在 Mac 菜单栏勾选“Android 改用 Wi-Fi（无需 USB 调试）”；发现手机后自动连接。首次使用需允许 macOS 访问本地网络。
 
-Mac 端为两种手机分别运行独立的 USB 通道：Android 使用 Mac 本机端口 `7311`，iPhone 使用 Mac 本机端口 `7312` 并转发到手机端口 `7311`。两端可以同时连接；iOS 与 Android 手机工程仍独立构建和调试。
+Android USB 模式使用 ADB `forward`；Android Wi-Fi 模式通过 Bonjour 发现手机并直接建立 TCP 连接。Mac 菜单可在 USB/ADB 与 Wi-Fi 之间切换。iPhone 仍使用独立的 USBMux/iproxy 通道，iOS 与 Android 手机工程可以分别构建和调试。
 
 ## 开源与隐私
 

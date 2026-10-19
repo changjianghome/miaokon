@@ -51,7 +51,7 @@ public final class MainActivity extends Activity implements UsbTcpServer.Listene
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         hideSystemUi();
         settings = new TouchpadSettings(this);
-        transport = new UsbTcpServer(this);
+        transport = new UsbTcpServer(this, this);
 
         FrameLayout root = new FrameLayout(this);
         padView = new GesturePadView(this, transport, settings, this);
@@ -72,7 +72,7 @@ public final class MainActivity extends Activity implements UsbTcpServer.Listene
         row.setBackgroundColor(0xDD0D141C);
 
         statusView = new TextView(this);
-        statusView.setText("USB 服务启动中…");
+        statusView.setText("USB/Wi-Fi 服务启动中…");
         statusView.setTextColor(Color.WHITE);
         statusView.setTextSize(13);
         row.addView(statusView, new LinearLayout.LayoutParams(0, -1, 1f));
@@ -210,7 +210,7 @@ public final class MainActivity extends Activity implements UsbTcpServer.Listene
     public void onAck(String id) {
         if (id != null && id.equals(pendingTestId)) {
             pendingTestId = null;
-            if (statusView != null) statusView.setText("USB 已连通，Mac 已回应 ✓");
+            if (statusView != null) statusView.setText("Mac 已回应，连接正常 ✓");
         }
     }
 

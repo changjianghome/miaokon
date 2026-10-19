@@ -2,7 +2,7 @@ import Foundation
 import Network
 import AppKit
 
-enum USBBridgeKind {
+enum USBBridgeKind: Equatable {
     case android
     case iPhone
 }
@@ -23,6 +23,10 @@ final class Server {
     private var adbExecutable: String?
     private var adbSerial: String?
     private var deviceLabel = "手机"
+    private var wifiResolver: BonjourResolver?
+    private var androidWiFiEnabled = false
+    private var targetEndpoint: NWEndpoint?
+    private var connectionLabel = "USB"
     private let queue = DispatchQueue(label: "tracepad.server", qos: .userInteractive)
     private let mouse: Mouse
     private(set) var isReady = false
@@ -30,11 +34,13 @@ final class Server {
     var onClientState: ((String) -> Void)?
     var onEvent: ((Event) -> Void)?
 
-    init(mouse: Mouse, port: UInt16, remotePort: UInt16 = 7311, bridgeKind: USBBridgeKind) {
+    init(mouse: Mouse, port: UInt16, remotePort: UInt16 = 7311, bridgeKind: USBBridgeKind,
+         androidWiFiEnabled: Bool = false) {
         self.mouse = mouse
         self.port = port
         self.remotePort = remotePort
         self.bridgeKind = bridgeKind
+        self.androidWiFiEnabled = bridgeKind == .android && androidWiFiEnabled
     }
 
     deinit {
@@ -48,20 +54,80 @@ final class Server {
         bridgeRetryWorkItem = nil
         connection?.cancel()
         connection = nil
+        wifiResolver?.stop()
+        wifiResolver = nil
         isReady = false
         if let process = bridgeProcess, process.isRunning {
             process.terminate()
             process.waitUntilExit()
         }
         bridgeProcess = nil
+        removeADBForward()
+    }
+
+    func start() throws {
+        if bridgeKind == .android && androidWiFiEnabled {
+            startAndroidWiFiDiscovery()
+            return
+        }
+        try configureBridge()
+    }
+
+    func setAndroidWiFiEnabled(_ enabled: Bool) {
+        guard bridgeKind == .android else { return }
+        queue.async {
+            guard self.androidWiFiEnabled != enabled else { return }
+            self.androidWiFiEnabled = enabled
+            self.bridgeRetryWorkItem?.cancel()
+            self.bridgeRetryWorkItem = nil
+            self.retryWorkItem?.cancel()
+            self.retryWorkItem = nil
+            self.connection?.cancel()
+            self.connection = nil
+            self.isReady = false
+            self.targetEndpoint = nil
+            if enabled {
+                self.removeADBForward()
+                self.startAndroidWiFiDiscovery()
+            } else {
+                self.wifiResolver?.stop()
+                self.wifiResolver = nil
+                self.targetEndpoint = .hostPort(
+                    host: NWEndpoint.Host("127.0.0.1"),
+                    port: NWEndpoint.Port(rawValue: self.port)!
+                )
+                self.connectionLabel = "USB"
+                do { try self.configureAndroidBridge() }
+                catch { self.onClientState?("USB 转发启动失败：\(error.localizedDescription)") }
+            }
+        }
+    }
+
+    private func startAndroidWiFiDiscovery() {
+        guard wifiResolver == nil else { return }
+        connectionLabel = "Wi-Fi"
+        onClientState?("Wi-Fi 模式：搜索手机（同一 Wi-Fi）…")
+        let resolver = BonjourResolver { [weak self] host, port in
+            guard let self else { return }
+            self.queue.async {
+                guard self.androidWiFiEnabled else { return }
+                let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!)
+                guard self.targetEndpoint != endpoint else { return }
+                self.targetEndpoint = endpoint
+                self.connectionLabel = "Wi-Fi"
+                log("[wifi] Bonjour 已解析手机地址：\(host):\(port)")
+                self.connectToPhone()
+            }
+        }
+        wifiResolver = resolver
+        resolver.start()
+    }
+
+    private func removeADBForward() {
         if let adb = adbExecutable, let serial = adbSerial {
             _ = run(adb, ["-s", serial, "forward", "--remove", "tcp:\(port)"])
         }
         adbSerial = nil
-    }
-
-    func start() throws {
-        try configureBridge()
     }
 
     private func configureBridge() throws {
@@ -74,6 +140,10 @@ final class Server {
     }
 
     private func configureAndroidBridge() throws {
+        guard !androidWiFiEnabled else {
+            startAndroidWiFiDiscovery()
+            return
+        }
         guard let adb = findADB() else {
             onClientState?("未找到 Android ADB，正在等待…")
             scheduleBridgeRetry()
@@ -101,6 +171,11 @@ final class Server {
             }
             adbSerial = serial
             deviceLabel = "Android 手机"
+            connectionLabel = "USB"
+            targetEndpoint = .hostPort(
+                host: NWEndpoint.Host("127.0.0.1"),
+                port: NWEndpoint.Port(rawValue: port)!
+            )
             log("[usb] adb forward 已启动：Mac 127.0.0.1:\(port) → Android localhost:\(remotePort)")
             connectToPhone()
             return
@@ -205,30 +280,42 @@ final class Server {
         connection?.cancel()
         isReady = false
         receiveBuffer.removeAll(keepingCapacity: true)
-        onClientState?("等待 USB 手机连接…")
+        onClientState?("等待 \(connectionLabel) 手机连接…")
 
-        guard let endpointPort = NWEndpoint.Port(rawValue: port) else { return }
-        let client = NWConnection(host: "127.0.0.1", port: endpointPort, using: .tcp)
+        let endpoint: NWEndpoint
+        if let targetEndpoint {
+            endpoint = targetEndpoint
+        } else if !androidWiFiEnabled, let endpointPort = NWEndpoint.Port(rawValue: port) {
+            endpoint = .hostPort(host: NWEndpoint.Host("127.0.0.1"), port: endpointPort)
+        } else {
+            return
+        }
+        log("[\(connectionLabel.lowercased())] 正在连接端点：\(endpoint)")
+        let client = NWConnection(to: endpoint, using: .tcp)
         connection = client
         client.stateUpdateHandler = { [weak self] state in
             guard let self, self.connection === client else { return }
             switch state {
+            case .setup, .preparing:
+                log("[\(self.connectionLabel.lowercased())] 网络连接状态：\(state)")
             case .ready:
                 self.isReady = true
                 self.retryDelay = 1
-                DispatchQueue.main.async { self.onClientState?("USB 已连接 \(self.deviceLabel)") }
-                log("[usb] USB TCP 通道已连接")
+                DispatchQueue.main.async { self.onClientState?("\(self.connectionLabel) 已连接 \(self.deviceLabel)") }
+                log("[\(self.connectionLabel.lowercased())] TCP 通道已连接")
                 self.read(from: client, buffer: Data())
             case .waiting(let error):
                 self.isReady = false
-                DispatchQueue.main.async { self.onClientState?("等待 USB：\(error.localizedDescription)") }
+                log("[\(self.connectionLabel.lowercased())] 等待连接：\(error)")
+                DispatchQueue.main.async { self.onClientState?("等待 \(self.connectionLabel)：\(error.localizedDescription)") }
                 self.scheduleReconnect(for: client)
             case .failed(let error):
                 self.isReady = false
-                DispatchQueue.main.async { self.onClientState?("USB 连接失败：\(error.localizedDescription)，正在重试") }
+                log("[\(self.connectionLabel.lowercased())] 连接失败：\(error)")
+                DispatchQueue.main.async { self.onClientState?("\(self.connectionLabel) 连接失败：\(error.localizedDescription)，正在重试") }
                 self.scheduleReconnect(for: client)
             default:
-                break
+                log("[\(self.connectionLabel.lowercased())] 网络连接状态：\(state)")
             }
         }
         client.start(queue: queue)
