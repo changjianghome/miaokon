@@ -10,8 +10,8 @@ android {
         applicationId = "site.miaokon.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "1.2.1"
+        versionCode = 7
+        versionName = "1.2.4"
     }
 
     compileOptions {

@@ -11,10 +11,30 @@ final class Mouse {
     private var lastScroll = Date.distantPast
     private var dragging = false
     private var dragMoveCount = 0
+    private var remoteModifiers = Set<Int>()
+
+    private struct ClickSequence {
+        let button: CGMouseButton
+        let point: CGPoint
+        let timestamp: TimeInterval
+        let count: Int64
+    }
+    private var clickSequence: ClickSequence?
 
     /// 手感参数
     var moveSensitivity: Double = 2.2   // 屏幕宽度 1.0 = 整个屏幕宽度
     var scrollSensitivity: Double = 1.0
+
+    private var remoteModifierFlags: CGEventFlags {
+        remoteModifiers.reduce(into: CGEventFlags()) { result, identifier in
+            switch identifier {
+            case 2, 5: result.insert(.maskControl)
+            case 3, 6: result.insert(.maskCommand)
+            case 4: result.insert(.maskShift)
+            default: break
+            }
+        }
+    }
 
     init() {
         cursor = CGEvent(source: nil)?.location ?? .zero
@@ -44,6 +64,7 @@ final class Mouse {
         cursor.y = min(max(cursor.y, b.minY + 1), b.maxY - 1)
         let type: CGEventType = dragging ? .leftMouseDragged : .mouseMoved
         if let e = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: cursor, mouseButton: .left) {
+            e.flags = remoteModifierFlags
             e.post(tap: .cghidEventTap)
             if dragging {
                 dragMoveCount += 1
@@ -79,6 +100,7 @@ final class Mouse {
         dragging = true
         dragMoveCount = 0
         if let e = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: cursor, mouseButton: .left) {
+            e.flags = remoteModifierFlags
             e.post(tap: .cghidEventTap)
             log("[mouse] leftMouseDown posted at=\(Int(cursor.x)),\(Int(cursor.y))")
         } else {
@@ -90,6 +112,7 @@ final class Mouse {
         guard dragging else { return }
         dragging = false
         if let e = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: cursor, mouseButton: .left) {
+            e.flags = remoteModifierFlags
             e.post(tap: .cghidEventTap)
             log("[mouse] leftMouseUp posted at=\(Int(cursor.x)),\(Int(cursor.y)) dragMoves=\(dragMoveCount)")
         } else {
@@ -98,30 +121,86 @@ final class Mouse {
         dragMoveCount = 0
     }
 
+    /// Android's configurable top-left key. IDs are shared with MainActivity:
+    /// 1 grave, 2 left Control, 3 left Command, 4 left Shift, 5 right Control, 6 right Command.
+    func setRemoteModifier(_ identifier: Int, pressed: Bool) {
+        guard let source = CGEventSource(stateID: .hidSystemState) else {
+            log("[keyboard] failed to create HID event source for modifier id=\(identifier)")
+            return
+        }
+        let keyCode: CGKeyCode
+        let modifierFlag: CGEventFlags
+        switch identifier {
+        case 1: keyCode = 0x32; modifierFlag = []                 // ANSI grave / tilde
+        case 2: keyCode = 0x3B; modifierFlag = .maskControl      // Left Control
+        case 3: keyCode = 0x37; modifierFlag = .maskCommand      // Left Command (Win)
+        case 4: keyCode = 0x38; modifierFlag = .maskShift        // Left Shift
+        case 5: keyCode = 0x3E; modifierFlag = .maskControl      // Right Control
+        case 6: keyCode = 0x36; modifierFlag = .maskCommand      // Right Command (Win)
+        default: return
+        }
+        if pressed {
+            guard remoteModifiers.insert(identifier).inserted else { return }
+        } else {
+            guard remoteModifiers.remove(identifier) != nil else { return }
+        }
+        let flags = remoteModifiers.reduce(into: CGEventFlags()) { result, key in
+            switch key {
+            case 2, 5: result.insert(.maskControl)
+            case 3, 6: result.insert(.maskCommand)
+            case 4: result.insert(.maskShift)
+            default: break
+            }
+        }
+        if let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: pressed) {
+            event.flags = pressed ? flags.union(modifierFlag) : flags
+            event.post(tap: .cghidEventTap)
+        } else {
+            log("[keyboard] failed to create HID key event id=\(identifier) pressed=\(pressed)")
+        }
+        log("[keyboard] remote modifier id=\(identifier) \(pressed ? "down" : "up") source=hidSystemState")
+    }
+
+    func releaseRemoteModifiers() {
+        for identifier in Array(remoteModifiers) {
+            setRemoteModifier(identifier, pressed: false)
+        }
+    }
+
     func tap(button: CGMouseButton = .left, at point: CGPoint? = nil) {
         let p = point ?? cursor
         cursor = p
+        let now = ProcessInfo.processInfo.systemUptime
+        let clickCount: Int64
+        if let previous = clickSequence,
+           previous.button == button,
+           now - previous.timestamp <= NSEvent.doubleClickInterval,
+           hypot(p.x - previous.point.x, p.y - previous.point.y) <= 5 {
+            clickCount = min(previous.count + 1, 3)
+        } else {
+            clickCount = 1
+        }
+        clickSequence = ClickSequence(button: button, point: p, timestamp: now, count: clickCount)
         let down: CGEventType = button == .right ? .rightMouseDown : .leftMouseDown
         let up: CGEventType = button == .right ? .rightMouseUp : .leftMouseUp
         // 先把指针挪到目标点，否则部分 App 会按旧位置判定
         if let m = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: button) {
-            // 手势注入的鼠标点击不继承 Control 等键盘修饰键；否则 macOS 会把
-            // Control+左键解释成右键。四指 Mission Control 使用带 Control 标志的键盘事件。
-            m.flags = []
+            // 无自定义按键时 flags 为空；按住自定义修饰键时保留它，以支持组合点击。
+            m.flags = remoteModifierFlags
             m.post(tap: .cghidEventTap)
         }
         if let d = CGEvent(mouseEventSource: nil, mouseType: down, mouseCursorPosition: p, mouseButton: button) {
-            d.setIntegerValueField(.mouseEventClickState, value: 1)
-            d.flags = []
+            d.setIntegerValueField(.mouseEventClickState, value: clickCount)
+            d.flags = remoteModifierFlags
             d.post(tap: .cghidEventTap)
         }
         usleep(35_000)
         if let u = CGEvent(mouseEventSource: nil, mouseType: up, mouseCursorPosition: p, mouseButton: button) {
-            u.setIntegerValueField(.mouseEventClickState, value: 1)
-            u.flags = []
+            u.setIntegerValueField(.mouseEventClickState, value: clickCount)
+            u.flags = remoteModifierFlags
             u.post(tap: .cghidEventTap)
         }
-        log("[mouse] tap injected button=\(button == .right ? "right" : "left") at=\(Int(p.x)),\(Int(p.y)) flags=0")
+        log("[mouse] tap injected button=\(button == .right ? "right" : "left") clickState=\(clickCount) at=\(Int(p.x)),\(Int(p.y)) flags=\(remoteModifierFlags.rawValue)")
     }
 
     func doubleTap() {
@@ -147,6 +226,7 @@ final class Mouse {
         let sy = Int32((dy * 40 * scrollSensitivity).rounded())
         guard sx != 0 || sy != 0 else { return }
         if let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: sy, wheel2: sx, wheel3: 0) {
+            e.flags = remoteModifierFlags
             e.post(tap: .cghidEventTap)
         }
     }

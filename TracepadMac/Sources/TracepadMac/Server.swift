@@ -19,6 +19,7 @@ final class Server {
     private var retryDelay: TimeInterval = 1
     private var receiveBuffer = Data()
     private var pendingPinchSteps: Int32 = 0
+    private var activeRemoteModifier: Int?
     private var pinchFlushWorkItem: DispatchWorkItem?
     private var adbExecutable: String?
     private var adbSerial: String?
@@ -48,6 +49,7 @@ final class Server {
     }
 
     func stop() {
+        DispatchQueue.main.async { self.releaseRemoteModifier() }
         retryWorkItem?.cancel()
         retryWorkItem = nil
         bridgeRetryWorkItem?.cancel()
@@ -311,6 +313,7 @@ final class Server {
                 self.scheduleReconnect(for: client)
             case .failed(let error):
                 self.isReady = false
+                DispatchQueue.main.async { self.releaseRemoteModifier() }
                 log("[\(self.connectionLabel.lowercased())] 连接失败：\(error)")
                 DispatchQueue.main.async { self.onClientState?("\(self.connectionLabel) 连接失败：\(error.localizedDescription)，正在重试") }
                 self.scheduleReconnect(for: client)
@@ -356,6 +359,7 @@ final class Server {
             if error != nil || complete {
                 self.isReady = false
                 client.cancel()
+                DispatchQueue.main.async { self.releaseRemoteModifier() }
                 DispatchQueue.main.async { self.onClientState?("USB 已断开，等待手机重连") }
                 self.scheduleReconnect(for: client)
                 return
@@ -438,8 +442,29 @@ final class Server {
             if v != 0 { mouse.systemSwipe(k, direction: v) }
         case .spaceSwipe:
             if let phase = ev.p { mouse.spaceSwipe(phase: phase, progress: dx, velocity: v) }
+        case .modifierDown:
+            setRemoteModifier(identifier: Int(v), pressed: true)
+        case .modifierUp:
+            setRemoteModifier(identifier: Int(v), pressed: false)
         case .pause: break
         }
         onEvent?(ev)
+    }
+
+    private func setRemoteModifier(identifier: Int, pressed: Bool) {
+        if pressed {
+            guard activeRemoteModifier == nil || activeRemoteModifier == identifier else { return }
+            activeRemoteModifier = identifier
+        } else {
+            guard activeRemoteModifier == identifier else { return }
+            activeRemoteModifier = nil
+        }
+        mouse.setRemoteModifier(identifier, pressed: pressed)
+    }
+
+    private func releaseRemoteModifier() {
+        guard let identifier = activeRemoteModifier else { return }
+        activeRemoteModifier = nil
+        mouse.setRemoteModifier(identifier, pressed: false)
     }
 }

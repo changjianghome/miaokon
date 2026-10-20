@@ -34,6 +34,8 @@ enum Kind: String, Codable {
     case threeSwipe   // 三指横扫，v = -1 向左 / +1 向右（上滑=expose，下滑=桌面）
     case fourSwipe    // 四指上滑 = 调度中心，v=1
     case spaceSwipe   // 四指左右连续滑动以拖拽切换 Spaces
+    case modifierDown // Android 左上角自定义按键按下，v=RemoteKey ID
+    case modifierUp   // Android 左上角自定义按键释放，v=RemoteKey ID
     case pause        // 心跳
 }
 
