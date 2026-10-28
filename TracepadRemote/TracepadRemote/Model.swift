@@ -89,7 +89,7 @@ final class Model: ObservableObject {
             self?.hud = fingers > 0 ? "\(fingers) 指 · \(text)" : text
         }
         gestures.onDebug = { [weak self] s in self?.debugLog(s) }
-        sender.startUSBListener()
+        sender.startListener()
         // 心跳：既让 Mac 端知道在线，也帮我们确认手机是否真的发出去了
         pingTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.sender.send(Ev(k: .pause))
@@ -112,8 +112,8 @@ final class Model: ObservableObject {
         }
     }
 
-    func restartUSBConnection() {
-        sender.restartUSBListener()
+    func restartConnection() {
+        sender.restartListener()
     }
 
     func testHaptic() {

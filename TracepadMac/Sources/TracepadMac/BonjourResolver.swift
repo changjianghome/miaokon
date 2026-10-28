@@ -2,10 +2,15 @@ import Foundation
 
 final class BonjourResolver: NSObject, NetServiceBrowserDelegate, NetServiceDelegate {
     private let onResolved: (String, UInt16) -> Void
+    private let serviceType: String
+    private let serviceName: String
     private var browser: NetServiceBrowser?
     private var services: [String: NetService] = [:]
 
-    init(onResolved: @escaping (String, UInt16) -> Void) {
+    init(serviceType: String = "_miaokon._tcp.", serviceName: String = "miaokon-sj",
+         onResolved: @escaping (String, UInt16) -> Void) {
+        self.serviceType = serviceType
+        self.serviceName = serviceName
         self.onResolved = onResolved
     }
 
@@ -15,7 +20,7 @@ final class BonjourResolver: NSObject, NetServiceBrowserDelegate, NetServiceDele
             let browser = NetServiceBrowser()
             browser.delegate = self
             self.browser = browser
-            browser.searchForServices(ofType: "_miaokon._tcp.", inDomain: "local.")
+            browser.searchForServices(ofType: self.serviceType, inDomain: "local.")
         }
     }
 
@@ -33,7 +38,7 @@ final class BonjourResolver: NSObject, NetServiceBrowserDelegate, NetServiceDele
     }
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
-        guard service.name == "miaokon-sj" else { return }
+        guard service.name == serviceName else { return }
         services[service.name] = service
         service.delegate = self
         service.resolve(withTimeout: 6)
@@ -44,6 +49,7 @@ final class BonjourResolver: NSObject, NetServiceBrowserDelegate, NetServiceDele
     }
 
     func netServiceDidResolveAddress(_ sender: NetService) {
+        // 用 Bonjour 主机名而不是 IP：手机 DHCP 地址会变，主机名由 mDNS 持续更新。
         guard let host = sender.hostName?.trimmingCharacters(in: CharacterSet(charactersIn: ".")),
               !host.isEmpty,
               let port = UInt16(exactly: sender.port),

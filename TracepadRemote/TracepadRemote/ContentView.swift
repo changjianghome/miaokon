@@ -4,6 +4,7 @@ struct ContentView: View {
     @StateObject private var model = Model()
     @ObservedObject private var settings = Settings.shared
     @State private var showSettings = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack {
@@ -22,8 +23,8 @@ struct ContentView: View {
             VStack {
                 HStack {
                     Spacer()
-                    Button(action: { model.restartUSBConnection() }) {
-                        Label("重启连接", systemImage: "arrow.clockwise")
+                    Button(action: { model.restartConnection() }) {
+                        Label("重连", systemImage: "arrow.clockwise")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.primary)
                             .padding(.horizontal, 11)
@@ -31,7 +32,7 @@ struct ContentView: View {
                             .background(.ultraThinMaterial, in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("重启 USB 连接")
+                    .accessibilityLabel("重启连接")
 
                     Button(action: { showSettings = true }) {
                         Image(systemName: "gearshape")
@@ -52,6 +53,10 @@ struct ContentView: View {
         .persistentSystemOverlays(.hidden)
         .defersSystemGestures(on: .all)
         .preferredColorScheme(.dark)
+        .onChange(of: scenePhase) { phase in
+            // 回到前台时系统可能已回收 TCP 监听，主动重建，Mac 才能重新连上。
+            if phase == .active { model.restartConnection() }
+        }
     }
 
     private var statusOverlay: some View {
@@ -61,7 +66,7 @@ struct ContentView: View {
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 1) {
                 Text(model.state).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                Text("USB 有线直连 · TCP 7311")
+                Text("USB / Wi-Fi · TCP 7311")
                     .font(.system(size: 11, design: .monospaced)).foregroundStyle(.tertiary)
             }
             Spacer()
@@ -181,15 +186,15 @@ struct SettingsView: View {
                     }
                     Button("测试手机震动") { model.testHaptic() }
                 }
-                Section("USB 有线连接") {
-                    Text("用 USB 线连接 iPhone 和 Mac。触控板数据通过 USB 端口转发传输，不使用 Wi‑Fi。请保持手机上的 miaokon-sj 和 Mac 菜单栏接收端运行。")
+                Section("连接方式") {
+                    Text("USB：连接数据线，Mac 自动通过 USB 转发连接。\nWi-Fi：手机和 Mac 接入同一局域网，在 Mac 菜单栏开启“iPhone 改用 Wi-Fi”。无需数据线。")
                         .font(.footnote).foregroundStyle(.secondary)
                     Button {
-                        model.restartUSBConnection()
+                        model.restartConnection()
                     } label: {
-                        Label("重启 USB 连接", systemImage: "arrow.clockwise")
+                        Label("重启连接", systemImage: "arrow.clockwise")
                     }
-                    Text("连接没有恢复时点此重启手机端监听，Mac 会自动重新连接。")
+                    Text("连接没有恢复时点此重启手机端监听，Mac 会自动重新连接。Wi-Fi 连接要求两台设备在同一局域网。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("连接诊断") {
@@ -201,7 +206,7 @@ struct SettingsView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section {
-                    Text("手机和 Mac 使用 USB 线连接。请保持 miaokon-sj 横屏打开，并运行 miaokon-mac 菜单栏接收端。")
+                    Text("请保持 miaokon-sj 横屏打开，并运行 miaokon-mac 菜单栏接收端。Wi-Fi 首次使用时，请允许本地网络访问。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

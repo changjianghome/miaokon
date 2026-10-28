@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Darwin
 import AppKit
 
 enum USBBridgeKind: Equatable {
@@ -26,6 +27,21 @@ final class Server {
     private var deviceLabel = "手机"
     private var wifiResolver: BonjourResolver?
     private var androidWiFiEnabled = false
+    private var iPhoneWiFiEnabled = false
+    private var wifiWatchdog: DispatchWorkItem?
+    private var lastReceiveDate = Date.distantPast
+    private var staleChecks = 0
+    private static let pathMonitor: NWPathMonitor = {
+        let monitor = NWPathMonitor()
+        monitor.start(queue: DispatchQueue(label: "tracepad.path"))
+        return monitor
+    }()
+
+    private var pathSnapshot: String {
+        let p = Server.pathMonitor.currentPath
+        let ifaces = p.availableInterfaces.map { "\($0.name)(\($0.type == .wifi ? "wifi" : $0.type == .wiredEthernet ? "eth" : "other"))" }
+        return "status=\(p.status) ifaces=\(ifaces.joined(separator: ","))"
+    }
     private var targetEndpoint: NWEndpoint?
     private var connectionLabel = "USB"
     private let queue = DispatchQueue(label: "tracepad.server", qos: .userInteractive)
@@ -36,12 +52,13 @@ final class Server {
     var onEvent: ((Event) -> Void)?
 
     init(mouse: Mouse, port: UInt16, remotePort: UInt16 = 7311, bridgeKind: USBBridgeKind,
-         androidWiFiEnabled: Bool = false) {
+         androidWiFiEnabled: Bool = false, iPhoneWiFiEnabled: Bool = false) {
         self.mouse = mouse
         self.port = port
         self.remotePort = remotePort
         self.bridgeKind = bridgeKind
         self.androidWiFiEnabled = bridgeKind == .android && androidWiFiEnabled
+        self.iPhoneWiFiEnabled = bridgeKind == .iPhone && iPhoneWiFiEnabled
     }
 
     deinit {
@@ -68,9 +85,15 @@ final class Server {
     }
 
     func start() throws {
-        if bridgeKind == .android && androidWiFiEnabled {
-            startAndroidWiFiDiscovery()
+        switch bridgeKind {
+        case .android where androidWiFiEnabled:
+            startWiFiDiscovery(serviceType: "_miaokon._tcp.")
             return
+        case .iPhone where iPhoneWiFiEnabled:
+            startWiFiDiscovery(serviceType: "_miaokon-ios._tcp.")
+            return
+        default:
+            break
         }
         try configureBridge()
     }
@@ -88,6 +111,8 @@ final class Server {
             self.connection = nil
             self.isReady = false
             self.targetEndpoint = nil
+            self.wifiWatchdog?.cancel()
+            self.wifiWatchdog = nil
             if enabled {
                 self.removeADBForward()
                 self.startAndroidWiFiDiscovery()
@@ -106,15 +131,23 @@ final class Server {
     }
 
     private func startAndroidWiFiDiscovery() {
+        startWiFiDiscovery(serviceType: "_miaokon._tcp.")
+    }
+
+    private func startWiFiDiscovery(serviceType: String) {
         guard wifiResolver == nil else { return }
         connectionLabel = "Wi-Fi"
         onClientState?("Wi-Fi 模式：搜索手机（同一 Wi-Fi）…")
-        let resolver = BonjourResolver { [weak self] host, port in
+        startWiFiWatchdog()
+        let resolver = BonjourResolver(serviceType: serviceType) { [weak self] host, port in
             guard let self else { return }
             self.queue.async {
-                guard self.androidWiFiEnabled else { return }
+                let enabled = self.bridgeKind == .android ? self.androidWiFiEnabled : self.iPhoneWiFiEnabled
+                guard enabled else { return }
                 let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!)
-                guard self.targetEndpoint != endpoint else { return }
+                let isSameEndpoint = self.targetEndpoint == endpoint
+                // 同一地址再次解析到，也要重新连：可能上一次连接已经悄悄断开而没触发回调。
+                guard !isSameEndpoint || self.connection == nil else { return }
                 self.targetEndpoint = endpoint
                 self.connectionLabel = "Wi-Fi"
                 log("[wifi] Bonjour 已解析手机地址：\(host):\(port)")
@@ -123,6 +156,86 @@ final class Server {
         }
         wifiResolver = resolver
         resolver.start()
+    }
+
+    /// Wi-Fi 模式下守护连接：手机端重启、换地址或系统悄悄关掉 socket 时，
+    /// NWConnection 有时收不到任何回调，这里定期重新做一次 Bonjour 发现并重连。
+    private func startWiFiWatchdog() {
+        guard wifiWatchdog == nil else { return }
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.queue.async {
+                guard self.wifiEnabled else {
+                    self.wifiWatchdog = nil
+                    return
+                }
+                // 只要最近还在收数据（心跳每秒一次），就认为通道健康；
+                // 不能再依赖 isReady，它会被 NWConnection 的重复回调覆盖。
+                let alive = Date().timeIntervalSince(self.lastReceiveDate) <= 10
+                if !alive {
+                    log("[wifi] 守护检查：未连接，重新发现手机")
+                    self.wifiResolver?.stop()
+                    self.wifiResolver = nil
+                    self.retryWorkItem?.cancel()
+                    self.retryWorkItem = nil
+                    // 连接对象交给 connectToPhone 统一替换，避免旧连接的取消回调把新状态改回去。
+                    self.targetEndpoint = nil
+                    let type = self.bridgeKind == .android ? "_miaokon._tcp." : "_miaokon-ios._tcp."
+                    self.wifiWatchdog = nil
+                    self.startWiFiDiscovery(serviceType: type)
+                } else {
+                    self.staleChecks = 0
+                    self.wifiWatchdog = nil
+                    self.startWiFiWatchdog()
+                }
+            }
+        }
+        wifiWatchdog = item
+        queue.asyncAfter(deadline: .now() + 4, execute: item)
+    }
+
+    private var wifiEnabled: Bool {
+        bridgeKind == .android ? androidWiFiEnabled : iPhoneWiFiEnabled
+    }
+
+    func setIPhoneWiFiEnabled(_ enabled: Bool) {
+        guard bridgeKind == .iPhone else { return }
+        queue.async {
+            guard self.iPhoneWiFiEnabled != enabled else { return }
+            self.iPhoneWiFiEnabled = enabled
+            self.bridgeRetryWorkItem?.cancel()
+            self.bridgeRetryWorkItem = nil
+            self.retryWorkItem?.cancel()
+            self.retryWorkItem = nil
+            self.connection?.cancel()
+            self.connection = nil
+            self.isReady = false
+            self.targetEndpoint = nil
+            if enabled {
+                self.stopBridgeProcess()
+                self.startWiFiDiscovery(serviceType: "_miaokon-ios._tcp.")
+                log("[iphone] 连接模式切换为 Wi-Fi")
+            } else {
+                self.wifiResolver?.stop()
+                self.wifiResolver = nil
+                self.connectionLabel = "USB"
+                self.targetEndpoint = .hostPort(
+                    host: NWEndpoint.Host("127.0.0.1"),
+                    port: NWEndpoint.Port(rawValue: self.port)!
+                )
+                do { try self.configureIPhoneBridge() }
+                catch { self.onClientState?("USB 转发启动失败：\(error.localizedDescription)") }
+                log("[iphone] 连接模式切换为 USB")
+            }
+        }
+    }
+
+    private func stopBridgeProcess() {
+        if let process = bridgeProcess, process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+        }
+        bridgeProcess = nil
     }
 
     private func removeADBForward() {
@@ -193,6 +306,12 @@ final class Server {
     }
 
     private func configureIPhoneBridge() throws {
+        connectionLabel = "USB"
+        deviceLabel = "iPhone"
+        targetEndpoint = .hostPort(
+            host: NWEndpoint.Host("127.0.0.1"),
+            port: NWEndpoint.Port(rawValue: port)!
+        )
         let candidates = ["/opt/homebrew/bin/iproxy", "/usr/local/bin/iproxy"]
         guard let executable = candidates.first(where: FileManager.default.isExecutableFile(atPath:)) else {
             onClientState?("找不到 iproxy；请安装 libusbmuxd")
@@ -302,15 +421,23 @@ final class Server {
                 log("[\(self.connectionLabel.lowercased())] 网络连接状态：\(state)")
             case .ready:
                 self.isReady = true
+                self.lastReceiveDate = Date()
                 self.retryDelay = 1
                 DispatchQueue.main.async { self.onClientState?("\(self.connectionLabel) 已连接 \(self.deviceLabel)") }
                 log("[\(self.connectionLabel.lowercased())] TCP 通道已连接")
                 self.read(from: client, buffer: Data())
             case .waiting(let error):
                 self.isReady = false
-                log("[\(self.connectionLabel.lowercased())] 等待连接：\(error)")
+                log("[\(self.connectionLabel.lowercased())] 等待连接：\(error) 端点=\(endpoint) 路径=\(self.pathSnapshot)")
                 DispatchQueue.main.async { self.onClientState?("等待 \(self.connectionLabel)：\(error.localizedDescription)") }
-                self.scheduleReconnect(for: client)
+                // 实测 NWConnection 在 "Network is down" 后会一直卡在 waiting 不超时，
+                // 必须主动放弃这条连接再重试，否则会永久卡死。
+                self.queue.asyncAfter(deadline: .now() + 2) { [weak self] in
+                    guard let self, self.connection === client, !self.isReady else { return }
+                    client.cancel()
+                    self.connection = nil
+                    self.scheduleReconnect(for: client)
+                }
             case .failed(let error):
                 self.isReady = false
                 DispatchQueue.main.async { self.releaseRemoteModifier() }
@@ -341,7 +468,10 @@ final class Server {
         client.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, complete, error in
             guard let self, self.connection === client else { return }
             var pending = buffer
-            if let data, !data.isEmpty { pending.append(data) }
+            if let data, !data.isEmpty {
+                pending.append(data)
+                self.lastReceiveDate = Date()
+            }
             while pending.count >= 4 {
                 let length = pending.prefix(4).reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
                 guard length <= 65_536 else {
@@ -360,7 +490,7 @@ final class Server {
                 self.isReady = false
                 client.cancel()
                 DispatchQueue.main.async { self.releaseRemoteModifier() }
-                DispatchQueue.main.async { self.onClientState?("USB 已断开，等待手机重连") }
+                DispatchQueue.main.async { self.onClientState?("\(self.connectionLabel) 已断开，等待手机重连") }
                 self.scheduleReconnect(for: client)
                 return
             }

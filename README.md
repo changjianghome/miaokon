@@ -2,7 +2,7 @@
 
 > **PUBLIC / 公开源码仓库**。维护清理后的源码；当前可公开分发的安装包通过 GitHub Releases 提供。详细构建过程、个人签名信息和历史安装包保存在独立的私有仓库。
 
-把 iPhone 或 Android 手机当作 Mac 的多点触控板。iPhone 使用 USB；Android 可选 USB 或同一局域网 Wi-Fi。手机负责识别手势，Mac 端将手势转换成鼠标操作。
+把 iPhone 或 Android 手机当作 Mac 的多点触控板。两台手机都支持 USB，iPhone 与 Android 还可通过同一局域网 Wi-Fi 连接。手机负责识别手势，Mac 端将手势转换成鼠标操作。
 
 ## 功能
 
@@ -10,14 +10,15 @@
 - 双指捏合缩放
 - 三指拖拽、四指桌面切换与 Mission Control
 - 独立调节鼠标、滚动和缩放速度，支持触觉反馈
+- iPhone 可通过 USB 或 Wi-Fi 连接，Mac 菜单可切换并自动重连
 - Android 可通过 USB/ADB 或 Wi-Fi 连接；Wi-Fi 模式无需开启 USB 调试
 - 双指滚动与捏合可在触点持续按住时互相切换
 
 ## 下载
 
-- Android 最新安装包： [miaokon-sj 1.2.1](https://github.com/changjianghome/miaokon/releases/latest)
-- Mac Wi-Fi 安装包： [miaokon-mac 2.2.1 DMG](https://github.com/changjianghome/miaokon/releases/latest)
-- iPhone 自签名包： [miaokon-sj 2.0 未签名 IPA](https://github.com/changjianghome/miaokon/releases/latest)。需使用自己的 Apple ID/开发者证书重新签名后安装；未签名 IPA 不能直接安装。
+- Android 最新安装包： [miaokon-sj 1.2.4](https://github.com/changjianghome/miaokon/releases/latest)
+- Mac 安装包： [miaokon-mac 2.3.10 DMG](https://github.com/changjianghome/miaokon/releases/latest)
+- iPhone 自签名包： [miaokon-sj 2.2 未签名 IPA](https://github.com/changjianghome/miaokon/releases/latest)。需使用自己的 Apple ID/开发者证书重新签名后安装；未签名 IPA 不能直接安装。
 
 Mac DMG 中的 App 使用 ad-hoc 签名，不包含发布者证书身份。首次打开时，macOS 可能要求在“系统设置 → 隐私与安全性”手动允许。
 
@@ -73,11 +74,11 @@ APK 位于 `TracepadAndroid/app/build/outputs/apk/debug/app-debug.apk`。首次�
 
 ## 使用
 
-1. iPhone 用 USB 连接 Mac 并确认信任；Android 可用 USB（开启 USB 调试并授权此 Mac）或 Wi-Fi（手机和 Mac 接入同一局域网）。
+1. iPhone 可用 USB 连接并确认信任，或让手机和 Mac 接入同一局域网；Android 可用 USB（开启 USB 调试并授权此 Mac）或 Wi-Fi。
 2. 启动 Mac 接收端并授予“辅助功能/设备控制”权限。
-3. 启动对应的手机端并保持在前台。Android Wi-Fi 模式下，在 Mac 菜单栏勾选“Android 改用 Wi-Fi（无需 USB 调试）”；发现手机后自动连接。首次使用需允许 macOS 访问本地网络。
+3. 启动对应的手机端并保持在前台。Wi-Fi 模式下，在 Mac 菜单栏勾选“iPhone 改用 Wi-Fi”或“Android 改用 Wi-Fi（无需 USB 调试）”；发现手机后自动连接。首次使用需允许 macOS 访问本地网络。
 
-Android USB 模式使用 ADB `forward`；Android Wi-Fi 模式通过 Bonjour 发现手机并直接建立 TCP 连接。Mac 菜单可在 USB/ADB 与 Wi-Fi 之间切换。iPhone 仍使用独立的 USBMux/iproxy 通道，iOS 与 Android 手机工程可以分别构建和调试。
+iPhone USB 模式使用 USBMux/iproxy，Wi-Fi 模式通过 `_miaokon-ios._tcp.` Bonjour 服务发现并直连；Android USB 模式使用 ADB `forward`，Wi-Fi 模式通过 `_miaokon._tcp.` 发现并直连。Mac 菜单可分别切换两种手机与两种通道，连接断开后会自动重试。
 
 ## 开源与隐私
 

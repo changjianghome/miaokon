@@ -10,7 +10,7 @@
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>miaokon-sj</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>2.0</string>
+  <key>CFBundleShortVersionString</key><string>2.2</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSRequiresIPhoneOS</key><true/>
   <key>UILaunchScreen</key><dict/>
@@ -26,6 +26,8 @@
     <string>UIInterfaceOrientationLandscapeRight</string>
   </array>
   <key>NSLocalNetworkUsageDescription</key>
-  <string>通过 USB 线在 iPhone 和 Mac 之间传输触控板操作。</string>
+  <string>在使用 Wi-Fi 连接时，让 Mac 能在同一局域网中发现并连接 iPhone。</string>
+  <key>NSBonjourServices</key>
+  <array><string>_miaokon-ios._tcp</string></array>
 </dict>
 </plist>

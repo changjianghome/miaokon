@@ -15,20 +15,23 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-    <string>2.3.1</string>
+	<string>2.3.10</string>
 	<key>CFBundleVersion</key>
-    <string>16</string>
+	<string>16</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>MiaokonAndroidWiFiDefault</key>
 	<true/>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>miaokon-mac 在你启用 Android Wi-Fi 连接时搜索并连接同一局域网内的 miaokon-sj 手机。</string>
+	<key>MiaokonIPhoneWiFiDefault</key>
+	<true/>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_miaokon._tcp</string>
+		<string>_miaokon-ios._tcp</string>
 	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>miaokon-mac 在启用 Wi-Fi 连接时搜索并连接同一局域网内的 miaokon-sj 手机。</string>
 </dict>
 </plist>

@@ -99,6 +99,24 @@ final class AndroidWiFiController: NSObject {
     }
 }
 
+final class IPhoneWiFiController: NSObject {
+    private let server: Server
+    let menuItem = NSMenuItem(title: "iPhone 改用 Wi-Fi（同一局域网）", action: #selector(toggle(_:)), keyEquivalent: "")
+
+    init(server: Server, wifiEnabled: Bool) {
+        self.server = server
+        super.init()
+        menuItem.target = self
+        menuItem.state = wifiEnabled ? .on : .off
+    }
+
+    @objc private func toggle(_ sender: NSMenuItem) {
+        let enabled = sender.state != .on
+        sender.state = enabled ? .on : .off
+        server.setIPhoneWiFiEnabled(enabled)
+    }
+}
+
 let loginItemController = LoginItemController()
 
 // 请求 CGEvent 投递权限。macOS 27 将该权限显示为“设备控制和数据访问”。
@@ -109,11 +127,14 @@ let mouse = Mouse()
 let injectOK = mouse.selfTest()
 log("[main] 注入自检：\(injectOK ? "正常" : (eventAccess ? "失败（系统光标未移动）" : "失败（事件发送权限未授权）"))")
 let defaultAndroidWiFi = Bundle.main.object(forInfoDictionaryKey: "MiaokonAndroidWiFiDefault") as? Bool ?? false
+let defaultIPhoneWiFi = Bundle.main.object(forInfoDictionaryKey: "MiaokonIPhoneWiFiDefault") as? Bool ?? false
 let androidServer = Server(mouse: mouse, port: port, remotePort: 7311, bridgeKind: .android,
                            androidWiFiEnabled: defaultAndroidWiFi)
 let androidWiFiController = AndroidWiFiController(server: androidServer, wifiEnabled: defaultAndroidWiFi)
 let iPhonePort = port == UInt16.max ? port - 1 : port + 1
-let iPhoneServer = Server(mouse: mouse, port: iPhonePort, remotePort: 7311, bridgeKind: .iPhone)
+let iPhoneServer = Server(mouse: mouse, port: iPhonePort, remotePort: 7311, bridgeKind: .iPhone,
+                          iPhoneWiFiEnabled: defaultIPhoneWiFi)
+let iPhoneWiFiController = IPhoneWiFiController(server: iPhoneServer, wifiEnabled: defaultIPhoneWiFi)
 
 // 菜单栏状态：图标 + 端口 + 当前连接数 + 权限提示
 let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -133,6 +154,7 @@ menu.addItem(androidWiFiController.menuItem)
 let iPhoneInfo = NSMenuItem(title: "iPhone · 正在启动…", action: nil, keyEquivalent: "")
 iPhoneInfo.isEnabled = false
 menu.addItem(iPhoneInfo)
+menu.addItem(iPhoneWiFiController.menuItem)
 let permissionGranted = CGPreflightPostEventAccess()
 let permState = NSMenuItem(title: permissionGranted ? "设备控制和数据访问：已授权" : "设备控制和数据访问：未授权（点下面打开授权页面）", action: nil, keyEquivalent: "")
 permState.isEnabled = false
@@ -180,7 +202,8 @@ DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
         log("[main] Android \(mode) 通道尚未就绪；确认 miaokon-sj 前台运行")
     }
     if !iPhoneServer.isReady {
-        log("[main] iPhone USB 通道尚未就绪；确认 miaokon-sj 前台运行和 USB 信任")
+        let mode = defaultIPhoneWiFi ? "Wi-Fi" : "USB"
+        log("[main] iPhone \(mode) 通道尚未就绪；确认 miaokon-sj 前台运行")
     }
 }
 
